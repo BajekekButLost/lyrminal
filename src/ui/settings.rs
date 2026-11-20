@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::{
     Alignment, Background, ClickSeek, Config, MatchTier, PlayerMode, Renderer, SPICY_KEY_ENV, ScrollAnimation,
-    VisualStyle,
+    SyllableSpacing, VisualStyle,
 };
 use crate::providers::cache::MAX_TTL_DAYS;
 use crate::providers::{ordered_ids, provider_name};
@@ -379,6 +379,17 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     Kind::Toggle {
                         get: |c| c.appearance.emphasis,
                         set: |c, v| c.appearance.emphasis = v,
+                    },
+                ),
+                item(
+                    "Syllable spacing",
+                    "Pixel renderer, Spring style. Joined keeps the syllables of a word touching as they grow and shrink. Separate scales each syllable on its own, like Spicy Lyrics, so small gaps open inside words.",
+                    Kind::Choice {
+                        options: &["joined", "separate"],
+                        get: |c| (c.appearance.syllable_spacing == SyllableSpacing::Separate) as usize,
+                        set: |c, i| {
+                            c.appearance.syllable_spacing = if i == 1 { SyllableSpacing::Separate } else { SyllableSpacing::Joined }
+                        },
                     },
                 ),
                 item(
