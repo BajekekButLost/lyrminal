@@ -13,7 +13,7 @@ use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput, push_px_hit};
 use crate::config::ClickSeek;
 use crate::anim::{Rgb, Spring, lerp};
-use crate::config::{Alignment, Background, VisualStyle};
+use crate::config::{Alignment, Background, SyllableSpacing, VisualStyle};
 use crate::lyrics::process::{self, ItemKind, Prepared, State};
 use crate::lyrics::{LyricLine, SyncKind, VocalGroup};
 
@@ -67,9 +67,18 @@ struct Part {
 }
 
 impl Part {
-    fn syllable_chain(&self, scale: impl Fn(usize) -> f32) -> Vec<(f32, f32)> {
+    fn syllable_chain(&self, spacing: SyllableSpacing, scale: impl Fn(usize) -> f32) -> Vec<(f32, f32)> {
         let n = self.syl_boxes.len();
         let mut out: Vec<(f32, f32)> = (0..n).map(|i| (0.0, scale(i))).collect();
+        if spacing == SyllableSpacing::Separate {
+            for (k, o) in out.iter_mut().enumerate() {
+                let (x0, x1) = self.syl_boxes[k];
+                if x0 <= x1 {
+                    o.0 = (x0 + x1) / 2.0 * (1.0 - o.1);
+                }
+            }
+            return out;
+        }
         let mut i = 0;
         while i < n {
             let mut j = i + 1;
@@ -121,6 +130,7 @@ struct LayoutKey {
     background: bool,
     center: bool,
     bloom: bool,
+    spacing: SyllableSpacing,
 }
 
 struct PLayout {
@@ -522,7 +532,7 @@ impl PixelRenderer {
                 && input.prepared.lyrics.kind == SyncKind::Syllable
                 && group.is_some();
             let rest_scale = effects::SPLINES.word_scale.at(0.0) as f32;
-            let chain = part.syllable_chain(|_| rest_scale);
+            let chain = part.syllable_chain(input.appearance.syllable_spacing, |_| rest_scale);
             for g in part.glyphs.iter().filter(|g| !g.blank) {
                 let baseline = part.top + g.baseline;
                 let (origin, scale) = if spring_idle {
@@ -644,6 +654,7 @@ impl PixelRenderer {
             background: input.lyrics.background_vocals,
             center: input.appearance.alignment == Alignment::Center,
             bloom: style == VisualStyle::Bloom,
+            spacing: input.appearance.syllable_spacing,
         };
         if self.layout.as_ref().is_none_or(|l| l.key != key) {
             self.build_layout(input.prepared, key, content_w, input);
@@ -1022,7 +1033,7 @@ impl PixelRenderer {
 
         let chain = if style == VisualStyle::Spring {
             let anims = &self.anims;
-            part.syllable_chain(|si| {
+            part.syllable_chain(input.appearance.syllable_spacing, |si| {
                 anims
                     .get(&(bi, part.kind, si))
                     .map(|a| a.scale.position as f32)
@@ -1276,7 +1287,7 @@ mod tests {
         let mut renderer = PixelRenderer::new(load_fonts());
         let group = words("brigh|ter to|night", 0.0, 0.3);
         let part = renderer.build_part(PartKind::Lead, &group, false, 44.0, 800.0, 0.0, Align::Left, "", 700);
-        let uniform = part.syllable_chain(|_| 0.95);
+        let uniform = part.syllable_chain(SyllableSpacing::Joined, |_| 0.95);
         for (si, &(a, s)) in uniform.iter().enumerate() {
             let (x0, x1) = part.syl_boxes[si];
             let w = part.syl_words[si];
@@ -1288,11 +1299,18 @@ mod tests {
             assert!((a + x1 * s - (centre + (x1 - centre) * 0.95)).abs() < 1e-3);
         }
         let scales = [0.95, 1.05, 1.0, 0.97];
-        let mixed = part.syllable_chain(|si| scales[si]);
+        let mixed = part.syllable_chain(SyllableSpacing::Joined, |si| scales[si]);
         for (left, right) in [(0, 1), (2, 3)] {
             let end = mixed[left].0 + part.syl_boxes[right].0 * mixed[left].1;
             let start = mixed[right].0 + part.syl_boxes[right].0 * mixed[right].1;
             assert!((end - start).abs() < 1e-3, "gap {} between syllables {left} and {right}", start - end);
+        }
+        let separate = part.syllable_chain(SyllableSpacing::Separate, |si| scales[si]);
+        for (si, &(a, s)) in separate.iter().enumerate() {
+            let (x0, x1) = part.syl_boxes[si];
+            let centre = (x0 + x1) / 2.0;
+            assert!((a + centre * s - centre).abs() < 1e-3);
+            assert!((s - scales[si]).abs() < 1e-6);
         }
     }
 
