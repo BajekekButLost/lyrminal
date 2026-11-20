@@ -9,6 +9,7 @@ mod render;
 mod state;
 mod term;
 mod theme;
+mod ui;
 
 fn main() {
     println!("Hello, world!");
