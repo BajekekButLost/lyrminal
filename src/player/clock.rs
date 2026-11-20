@@ -1,6 +1,9 @@
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 const SLACK: f64 = 0.02;
+const SEEK_GUARD: Duration = Duration::from_millis(3000);
+const STALE_JUMP: f64 = 1.2;
+const RECENT: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 struct Observation {
@@ -18,6 +21,9 @@ pub struct PlaybackClock {
     observation: Option<Observation>,
     last_sample_at: Option<Instant>,
     freshness: i32,
+    guard_until: Option<Instant>,
+    stale_values: Vec<f64>,
+    recent_values: Vec<f64>,
     display: f64,
     display_at: Instant,
     pub smoothing: bool,
@@ -36,6 +42,9 @@ impl Default for PlaybackClock {
             observation: None,
             last_sample_at: None,
             freshness: 0,
+            guard_until: None,
+            stale_values: Vec::new(),
+            recent_values: Vec::new(),
             display: 0.0,
             display_at: now,
             smoothing: true,
@@ -55,9 +64,37 @@ impl PlaybackClock {
         self.rate = if rate > 0.0 { rate } else { 1.0 };
         self.observation = None;
         self.last_sample_at = None;
+        self.guard_until = None;
+        self.stale_values.clear();
+        self.recent_values.clear();
         self.exact(position, at);
         self.display = self.raw(Instant::now());
         self.display_at = Instant::now();
+    }
+
+    pub fn jump(&mut self, position: f64, at: Instant) {
+        self.sample(position, at, true);
+    }
+
+    fn arm_guard(&mut self, position: f64, at: Instant) {
+        let mut stale = std::mem::take(&mut self.recent_values);
+        if let Some(o) = self.observation {
+            stale.push(o.value);
+        }
+        stale.retain(|v| (v - position).abs() > 1e-6);
+        self.stale_values = stale;
+        self.guard_until = Some(at + SEEK_GUARD);
+    }
+
+    fn is_stale(&mut self, position: f64, at: Instant) -> bool {
+        let Some(until) = self.guard_until else { return false };
+        if at > until {
+            self.guard_until = None;
+            self.stale_values.clear();
+            return false;
+        }
+        let repeats_old = self.stale_values.iter().any(|v| (v - position).abs() < 1e-6);
+        repeats_old || (position - self.raw(at)).abs() > STALE_JUMP
     }
 
     fn exact(&mut self, position: f64, at: Instant) {
@@ -89,12 +126,22 @@ impl PlaybackClock {
     }
 
     pub fn sample(&mut self, position: f64, at: Instant, forced: bool) {
-        if forced || !self.playing {
+        if forced {
+            self.arm_guard(position, at);
             self.exact(position, at);
-            if forced {
-                self.display = self.raw(Instant::now());
-                self.display_at = Instant::now();
-            }
+            self.display = self.raw(Instant::now());
+            self.display_at = Instant::now();
+            return;
+        }
+        if self.is_stale(position, at) {
+            return;
+        }
+        self.recent_values.push(position);
+        if self.recent_values.len() > RECENT {
+            self.recent_values.remove(0);
+        }
+        if !self.playing {
+            self.exact(position, at);
             return;
         }
         let previous = self.last_sample_at.unwrap_or(at);
@@ -256,6 +303,51 @@ mod tests {
         let t1 = t0 + Duration::from_secs(1);
         c.set_playing(false, 1.0, t1);
         assert!((c.raw(t1 + Duration::from_secs(10)) - 6.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn stale_positions_after_a_seek_are_ignored() {
+        let t0 = Instant::now();
+        let mut c = PlaybackClock::default();
+        c.reset(10.0, t0, true, 1.0);
+        for step in 1..=20u64 {
+            let at = t0 + ms(step * 100);
+            let truth = 10.0 + step as f64 * 0.1;
+            c.sample(10.0 + (truth - 10.0).floor(), at, false);
+        }
+        let seek_at = t0 + ms(2050);
+        c.sample(60.0, seek_at, true);
+        for step in 1..=30u64 {
+            let at = seek_at + ms(step * 100);
+            let truth = 60.0 + step as f64 * 0.1;
+            let reported = if step <= 6 { 12.0 } else { 60.0 + (truth - 60.0 - 0.6).floor() + 0.6 };
+            c.sample(reported, at, false);
+            assert!((c.raw(at) - truth).abs() < 0.15, "step {step}: clock {} vs {truth}", c.raw(at));
+        }
+    }
+
+    #[test]
+    fn paused_seek_is_not_undone_by_stale_polls() {
+        let t0 = Instant::now();
+        let mut c = PlaybackClock::default();
+        c.reset(30.0, t0, false, 1.0);
+        c.sample(30.0, t0 + ms(100), false);
+        c.sample(50.0, t0 + ms(200), true);
+        c.sample(30.0, t0 + ms(300), false);
+        c.sample(30.0, t0 + ms(400), false);
+        assert!((c.raw(t0 + ms(400)) - 50.0).abs() < 1e-9);
+        c.sample(50.0, t0 + ms(500), false);
+        assert!((c.raw(t0 + ms(500)) - 50.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn genuine_jumps_without_a_seek_signal_are_followed() {
+        let t0 = Instant::now();
+        let mut c = PlaybackClock::default();
+        c.reset(10.0, t0, true, 1.0);
+        let at = t0 + ms(4000);
+        c.sample(90.0, at, false);
+        assert!((c.raw(at) - 90.0).abs() < 0.2);
     }
 
     #[test]
