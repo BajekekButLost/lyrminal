@@ -350,6 +350,15 @@ fn source_label(source: Option<&str>) -> String {
     }
 }
 
+fn source_tag(source: Option<&str>) -> Option<String> {
+    match source {
+        Some("spicy_lyrics") => Some("Community".into()),
+        Some("apple_music") => Some("Apple Music".into()),
+        Some("spotify") => Some("Spotify".into()),
+        _ => None,
+    }
+}
+
 fn convert_group(g: Group) -> VocalGroup {
     let syllables: Vec<Syllable> = g
         .syllables
@@ -407,6 +416,7 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
         provider: NAME.into(),
         provider_url: Some("https://spicylyrics.org".into()),
         source: Some(source_label(body.source.as_deref())),
+        source_tag: source_tag(body.source.as_deref()),
         songwriters: body.song_writers,
         contributors,
     };
@@ -567,12 +577,15 @@ mod tests {
         let l = convert(body).unwrap();
         assert!(l.credits.contributors.is_empty());
         assert_eq!(l.credits.source.as_deref(), Some("Spotify"));
+        assert_eq!(l.credits.source_tag.as_deref(), Some("Spotify"));
     }
 
     #[test]
     fn labels_unknown_source() {
         let json = serde_json::json!({"Type": "Static", "Lines": [{"Text": "a"}], "id": "x", "ids": {"spotify": "x"}, "source": "unknown"});
         let body: Body = serde_json::from_value(json).unwrap();
-        assert_eq!(convert(body).unwrap().credits.source.as_deref(), Some("Unknown source"));
+        let l = convert(body).unwrap();
+        assert_eq!(l.credits.source.as_deref(), Some("Unknown source"));
+        assert_eq!(l.credits.source_tag, None);
     }
 }
