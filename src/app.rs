@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::{Config, PlayerMode, Renderer, VisualStyle};
@@ -18,6 +18,7 @@ use crate::render::pixel::{Fonts, PixelRenderer};
 use crate::state::State;
 use crate::term::TermCaps;
 use crate::theme::{Artwork, Theme};
+use crate::ui::draw::{Target, UiHits};
 use crate::ui::keys::{self, Action};
 use crate::ui::settings::{self, SettingsAction, SettingsOutcome, SettingsState};
 
@@ -139,6 +140,7 @@ pub struct App {
     pub dirty: bool,
     pub progress_bar: Option<(u16, u16, u16)>,
     pub scrub: Option<f64>,
+    pub ui: UiHits,
 }
 
 impl App {
@@ -194,6 +196,7 @@ impl App {
             dirty: true,
             progress_bar: None,
             scrub: None,
+            ui: UiHits::default(),
         };
         if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
             app.notify("Spicy Lyrics needs an API key: press Esc → Providers");
@@ -566,7 +569,8 @@ impl App {
                     settings::paste(s, &text);
                 }
             }
-            Event::Mouse(m) if self.cfg.appearance.mouse && matches!(self.overlay, Overlay::None) => match m.kind {
+            Event::Mouse(m) if self.cfg.appearance.mouse && !matches!(self.overlay, Overlay::None) => self.on_overlay_mouse(m),
+            Event::Mouse(m) if self.cfg.appearance.mouse => match m.kind {
                 MouseEventKind::ScrollDown => self.scroll_by(MOUSE_SCROLL_ROWS),
                 MouseEventKind::ScrollUp => self.scroll_by(-MOUSE_SCROLL_ROWS),
                 MouseEventKind::Down(MouseButton::Left) => self.on_press(m.column, m.row),
@@ -614,7 +618,6 @@ impl App {
                 return;
             }
             Overlay::Players { selected } => {
-                use crossterm::event::KeyCode;
                 let n = self.players.len() + 1;
                 match key.code {
                     KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('p') => self.overlay = Overlay::None,
@@ -637,7 +640,6 @@ impl App {
                 return;
             }
             Overlay::Syncs(picker) => {
-                use crossterm::event::KeyCode;
                 let order = ordered_ids(&self.cfg);
                 let rows = picker.rows(&order);
                 let selectable = |r: &SyncRow| !matches!(r, SyncRow::Header { .. });
@@ -701,6 +703,80 @@ impl App {
         }
         if let Some(action) = keys::map(key) {
             self.on_action(action);
+        }
+    }
+
+    fn press(&mut self, code: KeyCode) {
+        self.on_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn on_overlay_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::ScrollDown if !matches!(self.overlay, Overlay::Help) => self.press(KeyCode::Down),
+            MouseEventKind::ScrollUp if !matches!(self.overlay, Overlay::Help) => self.press(KeyCode::Up),
+            MouseEventKind::Down(MouseButton::Left) => self.on_overlay_click(m.column, m.row),
+            _ => {}
+        }
+    }
+
+    fn on_overlay_click(&mut self, column: u16, row: u16) {
+        if !self.ui.in_modal(column, row) {
+            self.overlay = Overlay::None;
+            return;
+        }
+        let target = self.ui.at(column, row);
+        let key = match (&mut self.overlay, target) {
+            (Overlay::Help, _) => {
+                self.overlay = Overlay::None;
+                None
+            }
+            (Overlay::Settings(s), Some(Target::Section(i))) => {
+                s.editing = None;
+                s.confirm = None;
+                s.page = None;
+                s.section = i;
+                s.item = 0;
+                None
+            }
+            (Overlay::Settings(s), Some(Target::Back)) => {
+                s.editing = None;
+                s.confirm = None;
+                Some(KeyCode::Esc)
+            }
+            (Overlay::Settings(s), Some(Target::Row(i))) => {
+                let same = s.item == i;
+                if s.editing.is_some() && same {
+                    None
+                } else if s.confirm.is_some() {
+                    if same {
+                        Some(KeyCode::Char('y'))
+                    } else {
+                        s.confirm = None;
+                        s.item = i;
+                        None
+                    }
+                } else {
+                    s.editing = None;
+                    s.item = i;
+                    same.then_some(KeyCode::Enter)
+                }
+            }
+            (Overlay::Settings(_), Some(Target::Decrease)) => Some(KeyCode::Left),
+            (Overlay::Settings(_), Some(Target::Increase)) => Some(KeyCode::Right),
+            (Overlay::Players { selected }, Some(Target::Row(i))) => {
+                let same = *selected == i;
+                *selected = i;
+                same.then_some(KeyCode::Enter)
+            }
+            (Overlay::Syncs(p), Some(Target::Row(i))) => {
+                let same = p.selected == i;
+                p.selected = i;
+                same.then_some(KeyCode::Enter)
+            }
+            _ => None,
+        };
+        if let Some(code) = key {
+            self.press(code);
         }
     }
 
@@ -854,6 +930,10 @@ impl App {
     }
 
     fn on_press(&mut self, column: u16, row: u16) {
+        if let Some(Target::Action(action)) = self.ui.at(column, row) {
+            self.on_action(action);
+            return;
+        }
         if let Some((y, x0, width)) = self.progress_bar
             && row == y
             && column + 1 >= x0

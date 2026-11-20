@@ -48,6 +48,7 @@ pub const HELP: &[BindingGroup] = &[
             Binding { keys: "s", desc: "Search all providers and pick another sync" },
             Binding { keys: "R", desc: "Fetch lyrics again, skipping the cache" },
             Binding { keys: "q  Ctrl-C", desc: "Quit" },
+            Binding { keys: "Mouse", desc: "Click to select, again to open; wheel moves; click outside closes" },
         ],
     },
     BindingGroup {
