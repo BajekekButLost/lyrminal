@@ -156,7 +156,18 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Option<Placement> {
     let width = (inner.x + inner.width).saturating_sub(text_x) as usize;
     let source = match &app.lyrics {
         LyricsState::Ready { resolution, prepared, .. } => {
-            let mut s = format!("{} · {}", provider_name(&resolution.candidate.provider), prepared.lyrics.kind.label());
+            let mut s = prepared
+                .lyrics
+                .credits
+                .source_tag
+                .as_ref()
+                .map(|tag| format!("{tag} · "))
+                .unwrap_or_default();
+            s.push_str(&format!(
+                "{} · {}",
+                provider_name(&resolution.candidate.provider),
+                prepared.lyrics.kind.label()
+            ));
             if resolution.manual {
                 s.push_str(" · chosen");
             }

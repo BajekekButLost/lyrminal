@@ -168,6 +168,8 @@ pub struct Credits {
     #[serde(default)]
     pub provider_url: Option<String>,
     pub source: Option<String>,
+    #[serde(default)]
+    pub source_tag: Option<String>,
     pub songwriters: Vec<String>,
     pub contributors: Vec<Contributor>,
 }
