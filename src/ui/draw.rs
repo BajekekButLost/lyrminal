@@ -609,11 +609,11 @@ fn draw_settings(f: &mut Frame, app: &App) {
         desc,
     );
     let hint = if state.page.is_some() {
-        "↑↓ move · ←→ change · ↵ edit · Esc back"
+        "↑↓ move · ←→ change · ↵ edit · r reset · Esc back"
     } else if section == 0 {
-        "↵ configure · Space on/off · K/J reorder · Tab section · Esc close"
+        "↵ configure · Space on/off · K/J reorder · r reset · Tab section · Esc close"
     } else {
-        "Tab section · ↑↓ move · ←→ change · ↵ edit · Esc close"
+        "Tab section · ↑↓ move · ←→ change · ↵ edit · r reset · Esc close"
     };
     f.render_widget(Paragraph::new(hint).style(panel_ink(theme, bg, 0.4)), footer);
 }
