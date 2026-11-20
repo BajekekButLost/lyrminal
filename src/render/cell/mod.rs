@@ -214,8 +214,10 @@ impl CellRenderer {
         let mut any_active = false;
         self.anims.begin_frame();
 
+        let mut last_item = None;
         for block in &layout.blocks {
-            let item_offset = block.item.map(|i| self.scroller.item_offset(i, input.wall)).unwrap_or(0.0);
+            last_item = block.item.or(last_item);
+            let item_offset = last_item.map(|i| self.scroller.item_offset(i, input.wall)).unwrap_or(0.0);
             let block_y = block.top as f64 - base + item_offset;
             if block_y > area.height as f64 + 1.0 || block_y + (block.rows.len() as f64) < -1.0 {
                 continue;

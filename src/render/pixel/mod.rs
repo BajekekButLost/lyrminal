@@ -873,9 +873,14 @@ impl PixelRenderer {
         let frame = self.frame;
         self.masks.retain(|_, (_, used)| frame - *used <= MASK_TTL_FRAMES);
         info.animating = animating;
+        let credits_offset = item_tops
+            .len()
+            .checked_sub(1)
+            .map(|last| self.scroller.item_offset(last, input.wall))
+            .unwrap_or(0.0);
         PixelFrame {
             info,
-            credits_y: Some(ly + (credits_top as f64 - base) as f32).filter(|cy| *cy < ly + lh),
+            credits_y: Some(ly + (credits_top as f64 - base + credits_offset) as f32).filter(|cy| *cy < ly + lh),
             content_x: x0,
         }
     }
