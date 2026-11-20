@@ -3,6 +3,7 @@
 mod anim;
 mod config;
 mod lyrics;
+mod player;
 mod providers;
 mod state;
 
