@@ -121,7 +121,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
         Overlay::Syncs(_) => draw_syncs(f, app),
     }
     DrawOutput {
-        art: if overlay_open { None } else { art },
+        art,
         links: if overlay_open { Vec::new() } else { links },
         pixel,
     }
@@ -145,12 +145,20 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Option<Placement> {
         && let Some((cw, ch)) = app.caps.cell_px
     {
         let cols = ((rows as f32 * ch / cw).round() as u16).clamp(rows, 14);
-        art = Some(Placement {
+        let placement = Placement {
             col: inner.x,
             row: inner.y,
             cols,
             rows,
-        });
+        };
+        let hole = Rect {
+            x: placement.col,
+            y: placement.row,
+            width: cols.min((area.x + area.width).saturating_sub(placement.col)),
+            height: rows,
+        };
+        f.buffer_mut().set_style(hole, Style::default().bg(ratatui::style::Color::Reset));
+        art = Some(placement);
         text_x = inner.x + cols + 2;
     }
     let width = (inner.x + inner.width).saturating_sub(text_x) as usize;
@@ -761,7 +769,8 @@ fn draw_syncs(f: &mut Frame, app: &App) {
 }
 
 const PIXEL_IDS: [u32; 2] = [9001, 9002];
-const UNDER_BACKGROUNDS: i32 = -1_073_741_825;
+const ART_Z: i32 = -1_073_741_825;
+const PIXEL_Z: i32 = ART_Z - 1;
 
 #[derive(Default)]
 pub struct Graphics {
@@ -789,7 +798,7 @@ impl Graphics {
             kitty::transmit_temp_file(out, id, canvas.w as u32, canvas.h as u32, data, self.pixel_seq)?;
             kitty::forget_old_temp_files(self.pixel_seq, 4);
         }
-        kitty::place(out, id, 1, Placement { col: 0, row: 0, cols, rows }, UNDER_BACKGROUNDS)?;
+        kitty::place(out, id, 1, Placement { col: 0, row: 0, cols, rows }, PIXEL_Z)?;
         if let Some(old) = self.pixel_current.replace(id)
             && old != id
         {
@@ -824,7 +833,7 @@ impl Graphics {
         match (want, self.art.as_ref()) {
             (Some(p), Some((id, _))) => {
                 if self.placed != Some(p) {
-                    kitty::place(out, *id, 1, p, 1)?;
+                    kitty::place(out, *id, 1, p, ART_Z)?;
                     self.placed = Some(p);
                 }
             }
