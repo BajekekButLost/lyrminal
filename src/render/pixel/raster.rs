@@ -20,23 +20,28 @@ impl Mask {
         }
     }
 
-    pub fn stamp(&mut self, src: &[u8], sw: usize, sh: usize, sx: i32, sy: i32) {
+    pub fn stamp_shaded(&mut self, src: &[u8], sw: usize, sh: usize, sx: i32, sy: i32, mut shade: impl FnMut(i32) -> f32) {
+        let mut cols: Vec<f32> = Vec::with_capacity(sw);
+        for col in 0..sw {
+            cols.push(shade(sx + col as i32).clamp(0.0, 1.0));
+        }
         for row in 0..sh {
             let ty = sy + row as i32 - self.y;
             if ty < 0 || ty as usize >= self.h {
                 continue;
             }
-            for col in 0..sw {
+            for (col, a) in cols.iter().enumerate() {
                 let tx = sx + col as i32 - self.x;
                 if tx < 0 || tx as usize >= self.w {
                     continue;
                 }
-                let v = src[row * sw + col];
-                if v == 0 {
+                let v = src[row * sw + col] as f32 / 255.0 * a;
+                if v <= 0.0 {
                     continue;
                 }
                 let d = &mut self.data[ty as usize * self.w + tx as usize];
-                *d = (*d as u16 + v as u16 - (*d as u16 * v as u16) / 255).min(255) as u8;
+                let cur = *d as f32 / 255.0;
+                *d = ((v + cur * (1.0 - v)) * 255.0).round().min(255.0) as u8;
             }
         }
     }
@@ -198,26 +203,6 @@ impl Canvas {
                 }
                 let (rgb, a) = cols[col];
                 self.blend(x as usize, y as usize, rgb, a * m as f32 / 255.0);
-            }
-        }
-    }
-
-    pub fn draw_rgba(&mut self, data: &[u8], w: usize, h: usize, x0: i32, y0: i32, alpha: f32, clip: (i32, i32, i32, i32)) {
-        let (cx0, cy0, cx1, cy1) = clip;
-        for row in 0..h {
-            let y = y0 + row as i32;
-            if y < cy0.max(0) || y >= cy1.min(self.h as i32) {
-                continue;
-            }
-            for col in 0..w {
-                let x = x0 + col as i32;
-                if x < cx0.max(0) || x >= cx1.min(self.w as i32) {
-                    continue;
-                }
-                let i = (row * w + col) * 4;
-                let a = data[i + 3] as f32 / 255.0 * alpha;
-                let rgb = [data[i] as f32 / 255.0, data[i + 1] as f32 / 255.0, data[i + 2] as f32 / 255.0];
-                self.blend(x as usize, y as usize, rgb, a);
             }
         }
     }
