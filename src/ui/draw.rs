@@ -2,7 +2,7 @@ use std::io::{self, Write};
 use std::time::Instant;
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap};
@@ -16,7 +16,7 @@ use crate::providers::{ordered_ids, provider_name};
 use crate::render::{FrameInput, LinkSpan};
 use crate::term::kitty::{self, Placement};
 use crate::theme::Theme;
-use crate::ui::keys::HELP;
+use crate::ui::keys::{Action, HELP};
 use crate::ui::settings::{self, Kind};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -25,6 +25,44 @@ pub struct DrawOutput {
     pub art: Option<Placement>,
     pub links: Vec<LinkSpan>,
     pub pixel: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Target {
+    Row(usize),
+    Section(usize),
+    Back,
+    Decrease,
+    Increase,
+    Action(Action),
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct UiHits {
+    pub modal: Option<Rect>,
+    pub targets: Vec<(Rect, Target)>,
+}
+
+impl UiHits {
+    pub fn at(&self, x: u16, y: u16) -> Option<Target> {
+        let p = Position::new(x, y);
+        self.targets.iter().rev().find(|(r, _)| r.contains(p)).map(|(_, t)| *t)
+    }
+
+    pub fn in_modal(&self, x: u16, y: u16) -> bool {
+        self.modal.is_some_and(|r| r.contains(Position::new(x, y)))
+    }
+
+    fn push(&mut self, rect: Rect, target: Target, bounds: Rect) {
+        let rect = rect.intersection(bounds);
+        if !rect.is_empty() {
+            self.targets.push((rect, target));
+        }
+    }
+}
+
+fn row_rect(x: u16, y: u16, width: u16) -> Rect {
+    Rect { x, y, width, height: 1 }
 }
 
 fn ink(theme: &Theme, alpha: f32) -> Style {
@@ -109,17 +147,22 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     } else {
         None
     };
+    let mut hits = UiHits::default();
     if status_h > 0 {
-        draw_status(f, app, status);
+        draw_status(f, app, status, &mut hits);
     }
     let overlay_open = !matches!(app.overlay, Overlay::None);
+    if overlay_open {
+        hits = UiHits::default();
+    }
     match &app.overlay {
         Overlay::None => {}
-        Overlay::Help => draw_help(f, &theme),
-        Overlay::Settings(_) => draw_settings(f, app),
-        Overlay::Players { .. } => draw_players(f, app),
-        Overlay::Syncs(_) => draw_syncs(f, app),
+        Overlay::Help => draw_help(f, &theme, &mut hits),
+        Overlay::Settings(_) => draw_settings(f, app, &mut hits),
+        Overlay::Players { .. } => draw_players(f, app, &mut hits),
+        Overlay::Syncs(_) => draw_syncs(f, app, &mut hits),
     }
+    app.ui = hits;
     DrawOutput {
         art,
         links: if overlay_open { Vec::new() } else { links },
@@ -392,7 +435,7 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect, now: Instant) -> (u16, u1
     (area.y, area.x + pad + left.len() as u16 + 1, bar_w as u16)
 }
 
-fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+fn draw_status(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     let theme = &app.theme;
     let left = match &app.snapshot {
         Some(s) => {
@@ -402,16 +445,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         }
         None => "  ■ no player".into(),
     };
-    let mut right_parts = Vec::new();
+    let mut right_parts: Vec<(String, Option<Action>)> = Vec::new();
     let offset = app.cfg.sync.offset_ms + app.track_offset_ms();
     if offset != 0 {
-        right_parts.push(format!("offset {offset:+} ms"));
+        right_parts.push((format!("offset {offset:+} ms"), None));
     }
     if app.follow.manual {
-        right_parts.push("scrolling · f to follow".into());
+        right_parts.push(("scrolling · f to follow".into(), Some(Action::Follow)));
     }
-    right_parts.push("? help".into());
-    let right = format!("{}  ", right_parts.join(" · "));
+    right_parts.push(("? help".into(), Some(Action::Help)));
+    let joined = right_parts.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join(" · ");
+    let right = format!("{joined}  ");
     let middle = app
         .toast
         .as_ref()
@@ -419,13 +463,22 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default();
     let width = area.width as usize;
     let lw = UnicodeWidthStr::width(left.as_str());
-    let right = if lw + UnicodeWidthStr::width(right.as_str()) + 2 > width {
-        "? help  ".to_string()
+    let (right, right_parts) = if lw + UnicodeWidthStr::width(right.as_str()) + 2 > width {
+        ("? help  ".to_string(), vec![("? help".to_string(), Some(Action::Help))])
     } else {
-        right
+        (right, right_parts)
     };
     let rw = UnicodeWidthStr::width(right.as_str());
     let free = width.saturating_sub(lw + rw);
+    hits.push(row_rect(area.x, area.y, lw as u16), Target::Action(Action::Players), area);
+    let mut x = area.x + (lw + free) as u16;
+    for (text, action) in &right_parts {
+        let w = UnicodeWidthStr::width(text.as_str()) as u16;
+        if let Some(a) = action {
+            hits.push(row_rect(x, area.y, w), Target::Action(*a), area);
+        }
+        x += w + 3;
+    }
     let middle = if free > 4 { truncate(&middle, free - 4) } else { String::new() };
     let mw = UnicodeWidthStr::width(middle.as_str());
     let gap_left = free.saturating_sub(mw) / 2;
@@ -454,7 +507,7 @@ fn panel_ink(theme: &Theme, bg: Rgb, alpha: f32) -> Style {
     Style::default().fg(bg.mix(theme.text, alpha).to_color()).bg(bg.to_color())
 }
 
-fn modal(f: &mut Frame, theme: &Theme, title: &str, w: u16, h: u16) -> (Rect, Rgb) {
+fn modal(f: &mut Frame, theme: &Theme, title: &str, w: u16, h: u16, hits: &mut UiHits) -> (Rect, Rgb) {
     let area = f.area();
     let w = w.min(area.width.saturating_sub(2));
     let h = h.min(area.height.saturating_sub(2));
@@ -465,6 +518,7 @@ fn modal(f: &mut Frame, theme: &Theme, title: &str, w: u16, h: u16) -> (Rect, Rg
         height: h,
     };
     let (bg, style) = panel(theme);
+    hits.modal = Some(rect);
     f.render_widget(Clear, rect);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -483,9 +537,9 @@ fn modal(f: &mut Frame, theme: &Theme, title: &str, w: u16, h: u16) -> (Rect, Rg
     (padded, bg)
 }
 
-fn draw_help(f: &mut Frame, theme: &Theme) {
+fn draw_help(f: &mut Frame, theme: &Theme, hits: &mut UiHits) {
     let rows: usize = HELP.iter().map(|g| g.bindings.len() + 2).sum::<usize>() + 2;
-    let (inner, bg) = modal(f, theme, "Keys", 76, rows as u16 + 2);
+    let (inner, bg) = modal(f, theme, "Keys", 76, rows as u16 + 2, hits);
     let mut lines = Vec::new();
     for g in HELP {
         lines.push(Line::from(Span::styled(g.title, Style::default().fg(theme.accent.to_color()).add_modifier(Modifier::BOLD))));
@@ -504,11 +558,11 @@ fn draw_help(f: &mut Frame, theme: &Theme) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_settings(f: &mut Frame, app: &App) {
+fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
     let Overlay::Settings(state) = &app.overlay else { return };
     let theme = &app.theme;
     let area = f.area();
-    let (inner, bg) = modal(f, theme, "Settings", 96.min(area.width), area.height.saturating_sub(4).max(16));
+    let (inner, bg) = modal(f, theme, "Settings", 96.min(area.width), area.height.saturating_sub(4).max(16), hits);
     let secs = settings::sections(&app.cfg);
     let section = state.section.min(secs.len() - 1);
     let items = state.items(&app.cfg);
@@ -529,6 +583,9 @@ fn draw_settings(f: &mut Frame, app: &App) {
         })
         .collect();
     f.render_widget(Paragraph::new(nav_lines), nav);
+    for i in 0..secs.len() {
+        hits.push(row_rect(nav.x, nav.y + i as u16, nav.width), Target::Section(i), nav);
+    }
 
     let [crumb, list, desc, footer] = Layout::vertical([
         Constraint::Length(if state.page.is_some() { 2 } else { 0 }),
@@ -538,16 +595,19 @@ fn draw_settings(f: &mut Frame, app: &App) {
     ])
     .areas(body);
     if let Some(id) = &state.page {
+        let name = provider_name(id).to_string();
+        let crumb_w = UnicodeWidthStr::width("‹ Providers / ") + UnicodeWidthStr::width(name.as_str());
         f.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled("‹ Providers / ", panel_ink(theme, bg, 0.5)),
                 Span::styled(
-                    provider_name(id).to_string(),
+                    name,
                     Style::default().fg(theme.accent.to_color()).bg(bg.to_color()).add_modifier(Modifier::BOLD),
                 ),
             ])),
             crumb,
         );
+        hits.push(row_rect(crumb.x, crumb.y, crumb_w as u16), Target::Back, crumb);
     }
     let label_w = 30usize;
     let visible = list.height as usize;
@@ -564,6 +624,8 @@ fn draw_settings(f: &mut Frame, app: &App) {
                 _ => buf.to_string(),
             };
             format!("{shown}▏")
+        } else if is_sel && matches!(it.kind, Kind::Choice { .. } | Kind::Number { .. }) {
+            format!("‹ {} ›", settings::value_text(&app.cfg, &it.kind))
         } else {
             settings::value_text(&app.cfg, &it.kind)
         };
@@ -577,7 +639,15 @@ fn draw_settings(f: &mut Frame, app: &App) {
         let pad = label_w.saturating_sub(UnicodeWidthStr::width(label.as_str()));
         let width = list.width as usize;
         let value = truncate(&value, width.saturating_sub(label_w + 4));
-        let tail = width.saturating_sub(label_w + 2 + UnicodeWidthStr::width(value.as_str()) + pad);
+        let vw = UnicodeWidthStr::width(value.as_str());
+        let tail = width.saturating_sub(label_w + 2 + vw);
+        let y = list.y + (i - scroll) as u16;
+        hits.push(row_rect(list.x, y, list.width), Target::Row(i), list);
+        if is_sel && value.starts_with('‹') && value.ends_with('›') {
+            let vx = list.x + (label_w + 2) as u16;
+            hits.push(row_rect(vx, y, 2), Target::Decrease, list);
+            hits.push(row_rect(vx + vw as u16 - 2, y, 2), Target::Increase, list);
+        }
         lines.push(Line::from(vec![
             Span::styled(marker, Style::default().fg(theme.accent.to_color()).bg(row_bg.to_color())),
             Span::styled(label, label_style),
@@ -596,7 +666,7 @@ fn draw_settings(f: &mut Frame, app: &App) {
             settings::SettingsAction::ResetDefaults => "reset every setting and API key",
             settings::SettingsAction::PickPlayer => "pick a player",
         };
-        format!("Press y to {what}, any other key to cancel.")
+        format!("Press y or click it again to {what}, any other key to cancel.")
     } else if state.editing.is_some() {
         "Type or paste, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
     } else {
@@ -618,10 +688,10 @@ fn draw_settings(f: &mut Frame, app: &App) {
     f.render_widget(Paragraph::new(hint).style(panel_ink(theme, bg, 0.4)), footer);
 }
 
-fn draw_players(f: &mut Frame, app: &App) {
+fn draw_players(f: &mut Frame, app: &App, hits: &mut UiHits) {
     let Overlay::Players { selected } = &app.overlay else { return };
     let theme = &app.theme;
-    let (inner, bg) = modal(f, theme, "Players", 90, app.players.len() as u16 + 7);
+    let (inner, bg) = modal(f, theme, "Players", 90, app.players.len() as u16 + 7, hits);
     let current = app.snapshot.as_ref().map(|s| s.player.bus.clone());
     let sel_bg = bg.mix(theme.accent, 0.18);
     let mut lines = Vec::new();
@@ -651,6 +721,7 @@ fn draw_players(f: &mut Frame, app: &App) {
         let text = format!("{mark}{name}{}", if following { "  (following)" } else { "" });
         let detail = truncate(detail, width.saturating_sub(UnicodeWidthStr::width(text.as_str()) + 3));
         let fill = width.saturating_sub(UnicodeWidthStr::width(text.as_str()) + UnicodeWidthStr::width(detail.as_str()) + 2);
+        hits.push(row_rect(inner.x, inner.y + i as u16, inner.width), Target::Row(i), inner);
         lines.push(Line::from(vec![
             Span::styled(text, panel_ink(theme, row_bg, 0.95).add_modifier(if *chosen { Modifier::BOLD } else { Modifier::empty() })),
             Span::styled("  ", panel_ink(theme, row_bg, 0.5)),
@@ -662,15 +733,15 @@ fn draw_players(f: &mut Frame, app: &App) {
         lines.push(Line::from(Span::styled("  No MPRIS players are running.", panel_ink(theme, bg, 0.5))));
     }
     lines.push(Line::default());
-    lines.push(Line::from(Span::styled("Enter follow · Esc close", panel_ink(theme, bg, 0.4))));
+    lines.push(Line::from(Span::styled("Enter or click twice to follow · Esc close", panel_ink(theme, bg, 0.4))));
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-fn draw_syncs(f: &mut Frame, app: &App) {
+fn draw_syncs(f: &mut Frame, app: &App, hits: &mut UiHits) {
     let Overlay::Syncs(picker) = &app.overlay else { return };
     let theme = &app.theme;
     let area = f.area();
-    let (inner, bg) = modal(f, theme, "Choose a sync", 110, area.height.saturating_sub(4));
+    let (inner, bg) = modal(f, theme, "Choose a sync", 110, area.height.saturating_sub(4), hits);
     let [list, footer] = Layout::vertical([Constraint::Min(3), Constraint::Length(2)]).areas(inner);
     let order = ordered_ids(&app.cfg);
     let rows = picker.rows(&order);
@@ -687,6 +758,9 @@ fn draw_syncs(f: &mut Frame, app: &App) {
     for (i, row) in rows.iter().enumerate().skip(scroll).take(visible) {
         let is_sel = i == picker.selected;
         let row_bg = if is_sel { sel_bg } else { bg };
+        if !matches!(row, SyncRow::Header { .. }) {
+            hits.push(row_rect(list.x, list.y + (i - scroll) as u16, list.width), Target::Row(i), list);
+        }
         let line = match row {
             SyncRow::Auto => {
                 let auto_on = current.as_ref().is_none_or(|c| !c.2);
@@ -762,7 +836,7 @@ fn draw_syncs(f: &mut Frame, app: &App) {
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(status, panel_ink(theme, bg, 0.7))),
-            Line::from(Span::styled("Enter use this sync · r search again · Esc close", panel_ink(theme, bg, 0.4))),
+            Line::from(Span::styled("Enter or click twice to use this sync · r search again · Esc close", panel_ink(theme, bg, 0.4))),
         ]),
         footer,
     );
@@ -871,4 +945,22 @@ pub fn write_links(out: &mut impl Write, links: &[LinkSpan]) -> io::Result<()> {
         write!(out, "\x1b[4m\x1b]8;;{url}\x1b\\{}\x1b]8;;\x1b\\\x1b[0m\x1b8", l.text)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn later_targets_win_and_are_clipped() {
+        let bounds = Rect::new(0, 0, 20, 5);
+        let mut hits = UiHits::default();
+        hits.push(row_rect(0, 1, 20), Target::Row(3), bounds);
+        hits.push(row_rect(10, 1, 2), Target::Increase, bounds);
+        hits.push(row_rect(0, 9, 20), Target::Row(4), bounds);
+        assert_eq!(hits.at(5, 1), Some(Target::Row(3)));
+        assert_eq!(hits.at(11, 1), Some(Target::Increase));
+        assert_eq!(hits.at(5, 9), None);
+        assert_eq!(hits.targets.len(), 2);
+    }
 }
