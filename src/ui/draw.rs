@@ -389,13 +389,17 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
         .unwrap_or_default();
     let width = area.width as usize;
     let lw = UnicodeWidthStr::width(left.as_str());
+    let right = if lw + UnicodeWidthStr::width(right.as_str()) + 2 > width {
+        "? help  ".to_string()
+    } else {
+        right
+    };
     let rw = UnicodeWidthStr::width(right.as_str());
-    let room = width.saturating_sub(lw + rw + 2);
-    let middle = truncate(&middle, room);
+    let free = width.saturating_sub(lw + rw);
+    let middle = if free > 4 { truncate(&middle, free - 4) } else { String::new() };
     let mw = UnicodeWidthStr::width(middle.as_str());
-    let gap_left = (width.saturating_sub(mw)) / 2;
-    let gap_left = gap_left.saturating_sub(lw).max(1);
-    let gap_right = width.saturating_sub(lw + gap_left + mw + rw);
+    let gap_left = free.saturating_sub(mw) / 2;
+    let gap_right = free.saturating_sub(mw + gap_left);
     let playing = app.snapshot.as_ref().is_some_and(|s| s.status == Status::Playing);
     let line = Line::from(vec![
         Span::styled(left, if playing { accent(theme) } else { ink(theme, 0.55) }),
