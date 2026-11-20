@@ -154,18 +154,18 @@ struct SylAnim {
 
 impl SylAnim {
     fn new() -> Self {
-        Self::at(effects::SPLINES.word_scale.at(0.0), effects::SPLINES.word_lift.at(0.0))
+        Self::at(effects::SPLINES.word_scale.at(0.0), effects::SPLINES.word_lift.at(0.0), 0.0)
     }
 
     fn letter() -> Self {
-        Self::at(effects::SPLINES.letter_scale.at(0.0), effects::SPLINES.letter_lift.at(0.0))
+        Self::at(effects::SPLINES.letter_scale.at(0.0), effects::SPLINES.letter_lift.at(0.0), 0.0)
     }
 
-    fn at(scale: f64, lift: f64) -> Self {
+    fn at(scale: f64, lift: f64, glow: f64) -> Self {
         Self {
             scale: Spring::new(scale, 0.88, 0.64),
             lift: Spring::new(lift, 1.45, 0.4),
-            glow: Spring::new(0.0, 1.18, 0.56),
+            glow: Spring::new(glow, 1.18, 0.56),
         }
     }
 
@@ -824,6 +824,8 @@ impl PixelRenderer {
             } else {
                 1.0
             };
+            let (ix, sub_x) = split_subpixel(x0);
+            let (iy, sub_y) = split_subpixel(y);
             if live {
                 animating = true;
                 let block = LiveBlock {
@@ -834,10 +836,10 @@ impl PixelRenderer {
                     active: look.active as f32,
                     blur: look.depth as f32,
                     fade,
-                    ix: x0.floor() as i32,
-                    iy: y.floor() as i32,
-                    fx: x0 - x0.floor(),
-                    fy: y - y.floor(),
+                    ix,
+                    iy,
+                    fx: sub_x as f32 / SUBPIXEL_STEPS,
+                    fy: sub_y as f32 / SUBPIXEL_STEPS,
                     clip,
                     glow_color,
                 };
@@ -849,8 +851,6 @@ impl PixelRenderer {
             let rest = if state == State::Active { State::NotSung } else { state };
             let blur = (look.depth.max(0.0) as f32 * BLUR_KEY_SCALE).round() as u16;
             let idle = state == State::NotSung;
-            let (ix, sub_x) = split_subpixel(x0);
-            let (iy, sub_y) = split_subpixel(y);
             for pi in 0..part_count {
                 let alpha = {
                     let part = &self.layout.as_ref().unwrap().blocks[bi].parts[pi];
@@ -991,13 +991,9 @@ impl PixelRenderer {
             for si in 0..group.syllables.len() {
                 let s = &group.syllables[si];
                 let p = process::progress(t, s.start, s.end);
-                let anim = self.anims.entry((bi, part.kind, si)).or_insert_with(SylAnim::new);
-                settled &= anim.drive(
-                    effects::SPLINES.word_scale.at(p),
-                    effects::SPLINES.word_lift.at(p),
-                    effects::glow(p),
-                    dt,
-                );
+                let goal = (effects::SPLINES.word_scale.at(p), effects::SPLINES.word_lift.at(p), effects::glow(p));
+                let anim = self.anims.entry((bi, part.kind, si)).or_insert_with(|| SylAnim::at(goal.0, goal.1, goal.2));
+                settled &= anim.drive(goal.0, goal.1, goal.2, dt);
                 if !(emphasis_on && process::spring_emphasis(s)) {
                     continue;
                 }
@@ -1038,7 +1034,7 @@ impl PixelRenderer {
                             v
                         }
                     };
-                    let letter = self.letters.entry((bi, part.kind, si, k)).or_insert_with(SylAnim::letter);
+                    let letter = self.letters.entry((bi, part.kind, si, k)).or_insert_with(|| SylAnim::at(ts, tl, tg));
                     settled &= letter.drive(ts, tl, tg, dt);
                 }
             }
