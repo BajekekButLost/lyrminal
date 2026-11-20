@@ -311,14 +311,16 @@ struct SylLine {
     kind: Option<String>,
     #[serde(default)]
     opposite_aligned: bool,
+    #[serde(default)]
     lead: Group,
     #[serde(default)]
     background: Vec<Group>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Group {
+    #[serde(default)]
     syllables: Vec<Syl>,
     start_time: Option<f64>,
     end_time: Option<f64>,
@@ -425,9 +427,9 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
                         opposite: l.opposite_aligned,
                         lead,
                         background,
+                        background_only: false,
                     }
                 })
-                .filter(|l| !l.lead.syllables.is_empty())
                 .collect();
             (SyncKind::Syllable, lines)
         }
@@ -447,6 +449,7 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
                         opposite: l.opposite_aligned,
                         lead,
                         background: Vec::new(),
+                        background_only: false,
                     }
                 })
                 .collect();
@@ -467,6 +470,7 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
                         opposite: false,
                         lead,
                         background: Vec::new(),
+                        background_only: false,
                     }
                 })
                 .collect();
@@ -521,6 +525,36 @@ mod tests {
         assert_eq!(l.lines[0].background.len(), 1);
         assert_eq!(l.credits.contributors.len(), 1);
         assert_eq!(l.credits.contributors[0].role, "Uploaded by");
+    }
+
+    #[test]
+    fn keeps_background_only_and_early_background_lines() {
+        let json = serde_json::json!({
+            "Type": "Syllable",
+            "Content": [
+                {
+                    "Type": "Vocal",
+                    "OppositeAligned": true,
+                    "Lead": {"Syllables": []},
+                    "Background": [{"Syllables": [{"Text": "(ooh)", "StartTime": 0.5, "EndTime": 1.5}]}]
+                },
+                {
+                    "Type": "Vocal",
+                    "Lead": {"Syllables": [{"Text": "go", "StartTime": 3.0, "EndTime": 3.5}], "StartTime": 3.0, "EndTime": 3.5},
+                    "Background": [{"Syllables": [{"Text": "(hey)", "StartTime": 2.2, "EndTime": 2.8}]}]
+                }
+            ],
+            "id": "x", "ids": {"spotify": "x"}, "source": "spotify"
+        });
+        let body: Body = serde_json::from_value(json).unwrap();
+        let l = convert(body).unwrap();
+        assert_eq!(l.lines.len(), 2);
+        let first = &l.lines[0];
+        assert!(first.background_only && first.opposite);
+        assert_eq!(first.lead.text(), "(ooh)");
+        assert!((first.start - 0.5).abs() < 1e-9);
+        assert!((l.lines[1].start - 2.2).abs() < 1e-9);
+        assert!(!l.lines[1].background_only);
     }
 
     #[test]
