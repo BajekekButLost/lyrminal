@@ -278,7 +278,7 @@ fn draw_lyrics(f: &mut Frame, app: &mut App, area: Rect, now: Instant, dt: f64, 
             } else {
                 lines.push(dim("Start playing something in a player that supports MPRIS".into()));
             }
-            lines.push(dim("p: choose a player · o: settings · ?: help".into()));
+            lines.push(dim("p: choose a player · Esc: settings · ?: help".into()));
             if let Some(e) = &app.player_error {
                 lines.push(Line::from(Span::styled(e.clone(), ink(&theme, 0.4))));
             }
@@ -301,7 +301,7 @@ fn draw_lyrics(f: &mut Frame, app: &mut App, area: Rect, now: Instant, dt: f64, 
                 lines.push(dim(format!("{}: {}", a.provider, a.outcome)));
             }
             lines.push(Line::default());
-            lines.push(dim("s: search every provider · R: try again · o: settings".into()));
+            lines.push(dim("s: search every provider · R: try again · Esc: settings".into()));
             centered_message(f, &theme, area, lines);
         }
     }

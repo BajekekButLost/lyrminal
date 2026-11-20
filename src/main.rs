@@ -30,7 +30,7 @@ fn usage() {
     println!(
         "Lyrminal v{} — synced lyrics in your terminal\n\n\
          Usage: lyrminal [--help] [--version]\n\n\
-         Everything else is configured inside the app (press o).\n\
+         Everything else is configured inside the app (press Esc).\n\
          Config: {}",
         env!("CARGO_PKG_VERSION"),
         Config::path().display()
