@@ -81,18 +81,18 @@ pub struct ProvidersConfig {
     pub order: Vec<String>,
     pub disabled: Vec<String>,
     pub spicy_lyrics: SpicyConfig,
-    pub lrclib: LrclibConfig,
     pub prefer_synced: bool,
+    pub duration_tolerance_secs: f64,
 }
 
 impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
-            order: vec!["spicy-lyrics".into(), "lrclib".into()],
+            order: vec!["spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()],
             disabled: Vec::new(),
             spicy_lyrics: SpicyConfig::default(),
-            lrclib: LrclibConfig::default(),
             prefer_synced: true,
+            duration_tolerance_secs: 2.0,
         }
     }
 }
@@ -142,20 +142,6 @@ impl SpicyConfig {
         std::env::var(SPICY_KEY_ENV)
             .map(|k| !k.trim().is_empty())
             .unwrap_or(false)
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase")]
-pub struct LrclibConfig {
-    pub duration_tolerance_secs: f64,
-}
-
-impl Default for LrclibConfig {
-    fn default() -> Self {
-        Self {
-            duration_tolerance_secs: 2.0,
-        }
     }
 }
 

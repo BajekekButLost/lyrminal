@@ -1,19 +1,99 @@
 pub mod cache;
 pub mod lrclib;
+pub mod lrcred;
 pub mod resolve;
 pub mod spicy;
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
 use crate::config::{Config, MatchTier};
 use crate::lyrics::{Lyrics, SyncKind};
 
-pub const USER_AGENT: &str = concat!("Lyrminal v", env!("CARGO_PKG_VERSION"), " (terminal lyrics viewer)");
+pub const CONTACT_URL: &str = "https://bajekek.com";
+pub const CONTACT_EMAIL: &str = "me@bajekek.com";
+pub const USER_AGENT: &str = concat!(
+    "Lyrminal v",
+    env!("CARGO_PKG_VERSION"),
+    " (https://bajekek.com; me@bajekek.com)"
+);
+
+const MAX_WAIT: Duration = Duration::from_secs(8);
+
+pub struct RateGate {
+    min_interval: Duration,
+    state: Mutex<GateState>,
+}
+
+struct GateState {
+    last: Option<Instant>,
+    blocked_until: Option<Instant>,
+}
+
+fn jitter_fraction() -> f64 {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    (nanos % 1000) as f64 / 1000.0
+}
+
+impl RateGate {
+    pub fn new(min_interval: Duration) -> Self {
+        Self {
+            min_interval,
+            state: Mutex::new(GateState {
+                last: None,
+                blocked_until: None,
+            }),
+        }
+    }
+
+    pub async fn acquire(&self) -> ProviderResult<()> {
+        let mut st = self.state.lock().await;
+        let now = Instant::now();
+        if let Some(until) = st.blocked_until {
+            if until > now {
+                let wait = until - now;
+                if wait > MAX_WAIT {
+                    return Err(ProviderError::RateLimited(Some(wait.as_secs().max(1))));
+                }
+                tokio::time::sleep(wait).await;
+            }
+            st.blocked_until = None;
+        }
+        if let Some(last) = st.last {
+            let next = last + self.min_interval;
+            let now = Instant::now();
+            if next > now {
+                tokio::time::sleep(next - now).await;
+            }
+        }
+        st.last = Some(Instant::now());
+        Ok(())
+    }
+
+    pub async fn penalize(&self, retry_after_secs: Option<u64>) {
+        let base = retry_after_secs.unwrap_or(30).max(1) as f64;
+        let wait = base * (1.0 + 0.3 * jitter_fraction());
+        let mut st = self.state.lock().await;
+        st.blocked_until = Some(Instant::now() + Duration::from_secs_f64(wait));
+    }
+
+    pub async fn observe<T>(&self, result: ProviderResult<T>) -> ProviderResult<T> {
+        match &result {
+            Err(ProviderError::RateLimited(retry)) => self.penalize(*retry).await,
+            Err(ProviderError::Unavailable(_, retry)) => self.penalize(Some(retry.unwrap_or(5))).await,
+            _ => {}
+        }
+        result
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TrackQuery {
@@ -109,7 +189,7 @@ pub enum ProviderError {
     NotConfigured(String),
     NotFound,
     RateLimited(Option<u64>),
-    Unavailable(String),
+    Unavailable(String, Option<u64>),
     Http(u16, String),
     Network(String),
     Parse(String),
@@ -122,7 +202,7 @@ impl fmt::Display for ProviderError {
             ProviderError::NotFound => write!(f, "no lyrics found"),
             ProviderError::RateLimited(Some(s)) => write!(f, "rate limited, retry in {s}s"),
             ProviderError::RateLimited(None) => write!(f, "rate limited"),
-            ProviderError::Unavailable(m) => write!(f, "temporarily unavailable: {m}"),
+            ProviderError::Unavailable(m, _) => write!(f, "temporarily unavailable: {m}"),
             ProviderError::Http(code, m) => write!(f, "HTTP {code}: {m}"),
             ProviderError::Network(m) => write!(f, "network error: {m}"),
             ProviderError::Parse(m) => write!(f, "unexpected response: {m}"),
@@ -164,11 +244,27 @@ pub const KNOWN_PROVIDERS: &[ProviderInfo] = &[
         needs_key: true,
     },
     ProviderInfo {
+        id: lrcred::ID,
+        name: lrcred::NAME,
+        needs_key: false,
+    },
+    ProviderInfo {
         id: lrclib::ID,
         name: lrclib::NAME,
         needs_key: false,
     },
 ];
+
+static GATES: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<&'static str, Arc<RateGate>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+pub fn gate_for(id: &'static str, min_interval: Duration) -> Arc<RateGate> {
+    let mut gates = GATES.lock().unwrap_or_else(|e| e.into_inner());
+    gates
+        .entry(id)
+        .or_insert_with(|| Arc::new(RateGate::new(min_interval)))
+        .clone()
+}
 
 pub fn provider_name(id: &str) -> &str {
     KNOWN_PROVIDERS
@@ -222,9 +318,13 @@ impl Registry {
                     config.providers.spicy_lyrics.effective_key(),
                     config.providers.spicy_lyrics.min_tier,
                 ))),
+                lrcred::ID => providers.push(Arc::new(lrcred::LrcRed::new(
+                    client.clone(),
+                    config.providers.duration_tolerance_secs,
+                ))),
                 lrclib::ID => providers.push(Arc::new(lrclib::Lrclib::new(
                     client.clone(),
-                    config.providers.lrclib.duration_tolerance_secs,
+                    config.providers.duration_tolerance_secs,
                 ))),
                 _ => {}
             }
@@ -292,6 +392,41 @@ pub fn rate_tier(q: &TrackQuery, title: &str, artists: &[String], duration: Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    #[ignore]
+    async fn live_lookup() {
+        let client = http_client();
+        let q = TrackQuery {
+            title: "Call Back".into(),
+            artists: vec!["Don Toliver".into()],
+            album: Some("OCTANE".into()),
+            duration: Some(123.84),
+            ..Default::default()
+        };
+        let providers: Vec<Box<dyn LyricsProvider>> = vec![
+            Box::new(lrcred::LrcRed::new(client.clone(), 2.0)),
+            Box::new(lrclib::Lrclib::new(client.clone(), 2.0)),
+        ];
+        for p in providers {
+            match p.lookup(&q).await {
+                Ok(Some((c, l))) => println!(
+                    "{}: {} via {} ({:?}), {} lines, bg groups {}, credit url {:?}",
+                    p.name(),
+                    l.kind.label(),
+                    c.id,
+                    c.tier,
+                    l.lines.len(),
+                    l.lines.iter().map(|x| x.background.len()).sum::<usize>(),
+                    l.credits.provider_url
+                ),
+                Ok(None) => println!("{}: no match", p.name()),
+                Err(e) => println!("{}: error {e}", p.name()),
+            }
+            let cands = p.search(&q).await.map(|c| c.len());
+            println!("{}: search candidates {:?}", p.name(), cands.map_err(|e| e.to_string()));
+        }
+    }
 
     #[test]
     fn cleans_titles() {
