@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 
 use self::layout::{Group, Layout, LayoutOptions, Row, RowKind, build, row_x};
 use super::effects::{self, EdgeWord, bloom, spring};
+use super::lineanim::{LineAnims, LineLook};
 use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput, Hit, LinkSpan};
 use crate::anim::{Rgb, lerp};
@@ -22,6 +23,7 @@ const BLOOM_FADE_COLS: f64 = 2.0;
 pub struct CellRenderer {
     layout: Option<(usize, LayoutOptions, Arc<Layout>)>,
     scroller: Scroller,
+    anims: LineAnims,
     prepared_id: usize,
 }
 
@@ -119,6 +121,7 @@ impl CellRenderer {
     pub fn reset(&mut self) {
         self.layout = None;
         self.scroller.reset();
+        self.anims.reset();
     }
 
     pub fn is_animating(&self) -> bool {
@@ -209,6 +212,7 @@ impl CellRenderer {
         let all_sung = prepared.all_sung(t);
         let mut timing_cache: HashMap<(usize, Group), HashMap<usize, WordTiming>> = HashMap::new();
         let mut any_active = false;
+        self.anims.begin_frame();
 
         for block in &layout.blocks {
             let item_offset = block.item.map(|i| self.scroller.item_offset(i, input.wall)).unwrap_or(0.0);
@@ -230,11 +234,26 @@ impl CellRenderer {
                 any_active = true;
             }
             let distance = item.map(|(i, _)| i.abs_diff(target)).unwrap_or(0);
-            let depth = if input.appearance.depth_dimming && !manual && item_state != State::Active && kind != SyncKind::Static {
-                1.0 - 0.09 * distance.min(5) as f32
+            let depth_target = if input.appearance.depth_dimming && !manual && item_state != State::Active && kind != SyncKind::Static {
+                1.0 - 0.09 * distance.min(5) as f64
             } else {
                 1.0
             };
+            let active_target = if kind == SyncKind::Static || item_state == State::Active { 1.0 } else { 0.0 };
+            let look = match item {
+                Some((i, _)) => self.anims.step(i, active_target, depth_target, input.dt),
+                None => LineLook {
+                    active: active_target,
+                    depth: depth_target,
+                    settled: true,
+                },
+            };
+            if !look.settled {
+                any_active = true;
+            }
+            let depth = look.depth as f32;
+            let active_amount = look.active as f32;
+            let rest_state = if item_state == State::Active { State::NotSung } else { item_state };
             let fade = if input.appearance.fade_previous && !manual {
                 match item {
                     Some((i, it)) if item_state == State::Sung && i < target => {
@@ -286,8 +305,9 @@ impl CellRenderer {
                                 (d.opacity * (0.55 + 0.4 * d.fill)) as f32
                             };
                             let mut ink = Ink::new(alpha);
-                            ink.glow = d.glow as f32 * 0.6;
-                            ink.bold = d.glow > 0.7;
+                            if input.appearance.glow {
+                                ink.glow = d.glow as f32 * 0.6;
+                            }
                             let x = rx + di as u16 * 2;
                             put(buf, x, sy, symbol, ink, input, base_bg, bg);
                         }
@@ -304,7 +324,7 @@ impl CellRenderer {
                 let mut link_ink: Option<Ink> = None;
 
                 let bloom_edge = if style == VisualStyle::Bloom
-                    && item_state == State::Active
+                    && active_amount > 0.0
                     && kind == SyncKind::Syllable
                     && let (Some(li), RowKind::Lyric(g) | RowKind::Roman { group: g, timed: true }) = (line_idx, &row.kind)
                     && let Some(group) = group_of(prepared, li, *g)
@@ -315,19 +335,36 @@ impl CellRenderer {
                 };
 
                 for glyph in &row.glyphs {
-                    let mut ink = self.glyph_ink(
-                        input,
-                        prepared,
-                        &mut timing_cache,
-                        row,
-                        glyph,
-                        line_idx,
-                        item,
-                        item_state,
-                        t,
-                        bloom_edge,
-                        all_sung,
-                    );
+                    let mut ink_for = |state: State| {
+                        Self::glyph_ink(
+                            input,
+                            prepared,
+                            &mut timing_cache,
+                            row,
+                            glyph,
+                            line_idx,
+                            item,
+                            state,
+                            t,
+                            bloom_edge,
+                            all_sung,
+                        )
+                    };
+                    let mut ink = if active_amount >= 1.0 {
+                        ink_for(State::Active)
+                    } else if active_amount <= 0.0 {
+                        ink_for(rest_state)
+                    } else {
+                        let lit = ink_for(State::Active);
+                        let rest = ink_for(rest_state);
+                        Ink {
+                            alpha: rest.alpha + (lit.alpha - rest.alpha) * active_amount,
+                            glow: lit.glow * active_amount,
+                            bold: false,
+                            italic: lit.italic || rest.italic,
+                            underline: lit.underline || rest.underline,
+                        }
+                    };
                     ink.alpha *= depth * fade;
                     let x = rx + glyph.col;
                     if x >= area.x + area.width {
@@ -413,7 +450,6 @@ impl CellRenderer {
 
     #[allow(clippy::too_many_arguments)]
     fn glyph_ink(
-        &self,
         input: &FrameInput,
         prepared: &Prepared,
         timing_cache: &mut HashMap<(usize, Group), HashMap<usize, WordTiming>>,
@@ -483,11 +519,7 @@ impl CellRenderer {
                 };
                 match item_state {
                     State::NotSung => ink.alpha = if background { spring::NOT_SUNG * 0.8 } else { spring::NOT_SUNG },
-                    State::Sung => {
-                        let rest = if background { spring::SUNG * 0.8 } else { spring::SUNG };
-                        let since = (t - prepared.lyrics.lines[li].full_end()) / 0.25;
-                        ink.alpha = lerp(lit as f64, rest as f64, since.clamp(0.0, 1.0)) as f32;
-                    }
+                    State::Sung => ink.alpha = if background { spring::SUNG * 0.8 } else { spring::SUNG },
                     State::Active => {
                         if kind == SyncKind::Line {
                             let p = process::progress(t, it.start, prepared.lyrics.lines[li].end);
@@ -516,7 +548,6 @@ impl CellRenderer {
                                     } else if t >= s.end {
                                         ink.glow = 0.25;
                                     }
-                                    ink.bold = ink.glow > 0.45;
                                 }
                             } else if t < s.start {
                                 ink.alpha = unlit;
@@ -569,7 +600,6 @@ impl CellRenderer {
                                 {
                                     let amount = effects::bloom_flame(t - w.start, w.end - w.start, w.letters, glyph.letter);
                                     ink.glow = (amount * 0.75 * lit.max(0.4)) as f32;
-                                    ink.bold = amount > 0.35;
                                 }
                             }
                         }
