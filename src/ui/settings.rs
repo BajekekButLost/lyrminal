@@ -106,7 +106,7 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
             item(
                 "Credits",
-                "The provider is always shown under the lyrics; community syncs also credit and link the people who made them.",
+                "The provider and source are shown in the track header, or under the lyrics when the header is hidden. Community syncs also credit and link the people who made them, on one line under the lyrics.",
                 Kind::Info,
             ),
         ],
@@ -724,7 +724,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                 ),
                 item(
                     "Credits",
-                    "Lyrics are credited to the provider that served them, and community syncs to the people who made them, at the end of every song's lyrics.",
+                    "Lyrics are credited to the provider that served them, in the track header or at the end of the lyrics, and community syncs to the people who made them.",
                     Kind::Info,
                 ),
                 item("Config file", &crate::config::Config::path().display().to_string(), Kind::Info),

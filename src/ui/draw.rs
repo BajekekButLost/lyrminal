@@ -207,13 +207,11 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Option<Placement> {
     let width = (inner.x + inner.width).saturating_sub(text_x) as usize;
     let source = match &app.lyrics {
         LyricsState::Ready { resolution, prepared, .. } => {
-            let mut s = prepared
-                .lyrics
-                .credits
-                .source_tag
-                .as_ref()
-                .map(|tag| format!("{tag} · "))
-                .unwrap_or_default();
+            let credits = &prepared.lyrics.credits;
+            let tag = credits.source_tag.as_ref().or_else(|| {
+                credits.source.as_ref().filter(|_| crate::render::cell::layout::provider_in_header(credits))
+            });
+            let mut s = tag.map(|tag| format!("{tag} · ")).unwrap_or_default();
             s.push_str(&format!(
                 "{} · {}",
                 provider_name(&resolution.candidate.provider),
@@ -295,7 +293,7 @@ fn draw_lyrics(f: &mut Frame, app: &mut App, area: Rect, now: Instant, dt: f64, 
                 let pixel = app.pixel.as_mut().unwrap();
                 let out = pixel.render(&input, id, screen, area, cell);
                 if let Some(cy) = out.credits_y {
-                    draw_pixel_credits(f, &theme, &prepared.lyrics.credits, area, cell, cy, out.content_x, prepared.all_sung(t), links);
+                    draw_pixel_credits(f, &theme, &prepared.lyrics.credits, area, cell, cy, out.content_x, prepared.all_sung(t), app.cfg.appearance.show_header, links);
                 }
                 if show_cursor && app.follow.manual && out.info.cursor_item.is_some() {
                     let y = area.y + (area.height as f32 * 0.4) as u16;
@@ -368,11 +366,12 @@ fn draw_pixel_credits(
     credits_y: f32,
     content_x: f32,
     all_sung: bool,
+    header: bool,
     links: &mut Vec<LinkSpan>,
 ) {
     let col = (content_x / cell.0).round() as u16;
     let width = (area.x + area.width).saturating_sub(col + 2);
-    let rows = crate::render::cell::layout::credit_rows(credits, width, crate::render::cell::layout::Align::Left);
+    let rows = crate::render::cell::layout::credit_rows(credits, width, crate::render::cell::layout::Align::Left, header);
     let first = (credits_y / cell.1).ceil() as i32;
     let screen_h = f.area().height;
     for (i, row) in rows.iter().enumerate() {
@@ -385,18 +384,22 @@ fn draw_pixel_credits(
         let emphasis = matches!(row.kind, crate::render::cell::layout::RowKind::Credit { emphasis: true });
         let alpha = if all_sung { 0.8 } else { 0.5 } * if emphasis { 1.0 } else { 0.8 };
         let fg = bg.mix(theme.text, alpha);
-        let text: String = row.glyphs.iter().map(|g| g.text.as_str()).collect();
-        let mut style = Style::default().fg(fg.to_color());
-        if row.link.is_some() {
-            style = style.add_modifier(Modifier::UNDERLINED);
+        let style = Style::default().fg(fg.to_color());
+        let mut texts = vec![String::new(); row.links.len()];
+        for g in &row.glyphs {
+            let link = row.link_at(g.col);
+            let style = if link.is_some() { style.add_modifier(Modifier::UNDERLINED) } else { style };
+            f.buffer_mut().set_string(col + g.col, y, &g.text, style);
+            if let Some(i) = link {
+                texts[i].push_str(&g.text);
+            }
         }
-        f.buffer_mut().set_string(col, y, &text, style);
-        if let Some(url) = &row.link {
+        for (link, text) in row.links.iter().zip(texts) {
             links.push(LinkSpan {
-                x: col,
+                x: col + link.start,
                 y,
                 text,
-                url: url.clone(),
+                url: link.url.clone(),
                 fg,
                 bg: None,
                 bold: false,
