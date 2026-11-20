@@ -460,7 +460,11 @@ impl CellRenderer {
                 };
                 match item_state {
                     State::NotSung => ink.alpha = if background { spring::NOT_SUNG * 0.8 } else { spring::NOT_SUNG },
-                    State::Sung => ink.alpha = if background { spring::SUNG * 0.8 } else { spring::SUNG },
+                    State::Sung => {
+                        let rest = if background { spring::SUNG * 0.8 } else { spring::SUNG };
+                        let since = (t - prepared.lyrics.lines[li].full_end()) / 0.25;
+                        ink.alpha = lerp(lit as f64, rest as f64, since.clamp(0.0, 1.0)) as f32;
+                    }
                     State::Active => {
                         if kind == SyncKind::Line {
                             let p = process::progress(t, it.start, prepared.lyrics.lines[li].end);
