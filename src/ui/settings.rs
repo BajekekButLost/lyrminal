@@ -106,7 +106,7 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
             item(
                 "Credits",
-                "The provider is always shown under the lyrics; community syncs also credit and link the people who made them.",
+                "The provider and source are shown in the track header, or under the lyrics when the header is hidden. Community syncs also credit and link the people who made them, on one line under the lyrics.",
                 Kind::Info,
             ),
         ],
@@ -707,11 +707,6 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     },
                 ),
                 item("Clear cache", "Delete every cached lyric and lookup.", Kind::Action(SettingsAction::ClearCache)),
-                item(
-                    "Reset all settings",
-                    "Restore every setting to its default. Your API key is kept.",
-                    Kind::Action(SettingsAction::ResetDefaults),
-                ),
             ],
         },
         Section {
@@ -729,10 +724,15 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                 ),
                 item(
                     "Credits",
-                    "Lyrics are credited to the provider that served them, and community syncs to the people who made them, at the end of every song's lyrics.",
+                    "Lyrics are credited to the provider that served them, in the track header or at the end of the lyrics, and community syncs to the people who made them.",
                     Kind::Info,
                 ),
                 item("Config file", &crate::config::Config::path().display().to_string(), Kind::Info),
+                item(
+                    "Reset all settings",
+                    "Restore every setting to its default, including API keys.",
+                    Kind::Action(SettingsAction::ResetDefaults),
+                ),
             ],
         },
     ]
@@ -831,6 +831,48 @@ fn move_provider(cfg: &mut Config, id: &str, delta: i32) {
     }
 }
 
+fn reset_item(state: &mut SettingsState, cfg: &mut Config, kind: &Kind) -> bool {
+    let d = Config::default();
+    match kind {
+        Kind::Toggle { get, set } => {
+            let v = get(&d);
+            let changed = get(cfg) != v;
+            set(cfg, v);
+            changed
+        }
+        Kind::Choice { get, set, .. } => {
+            let v = get(&d);
+            let changed = get(cfg) != v;
+            set(cfg, v);
+            changed
+        }
+        Kind::Number { get, set, .. } => {
+            let v = get(&d);
+            let changed = get(cfg) != v;
+            set(cfg, v);
+            changed
+        }
+        Kind::Text { get, set, .. } => {
+            let v = get(&d);
+            let changed = get(cfg) != v;
+            set(cfg, v);
+            changed
+        }
+        Kind::Provider(id) => {
+            let before = (ordered_ids(cfg), cfg.providers.is_enabled(id));
+            cfg.providers.set_enabled(id, d.providers.is_enabled(id));
+            let want = ordered_ids(&d).iter().position(|p| p == id);
+            let have = ordered_ids(cfg).iter().position(|p| p == id);
+            if let (Some(want), Some(have)) = (want, have) {
+                move_provider(cfg, id, want as i32 - have as i32);
+                state.item = ordered_ids(cfg).iter().position(|p| p == id).unwrap_or(state.item);
+            }
+            before != (ordered_ids(cfg), cfg.providers.is_enabled(id))
+        }
+        Kind::Action(_) | Kind::Info => false,
+    }
+}
+
 pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) -> SettingsOutcome {
     let secs = sections(cfg);
     state.section = state.section.min(secs.len() - 1);
@@ -882,7 +924,7 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
     };
     match key.code {
         KeyCode::Esc if state.page.is_some() => leave_page(state, cfg),
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => return SettingsOutcome::Close,
+        KeyCode::Esc | KeyCode::Char('q') => return SettingsOutcome::Close,
         KeyCode::Tab => {
             state.page = None;
             state.section = (state.section + 1) % secs.len();
@@ -980,6 +1022,11 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
             },
             Kind::Number { .. } | Kind::Info => {}
         },
+        KeyCode::Char('r') => {
+            if reset_item(state, cfg, &current.kind) {
+                return SettingsOutcome::Changed;
+            }
+        }
         KeyCode::Delete | KeyCode::Backspace => {
             if let Kind::Text { set, .. } = &current.kind {
                 set(cfg, String::new());
@@ -1061,6 +1108,35 @@ mod tests {
         handle_key(&mut st, &mut cfg, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(cfg.providers.lrc_red.duration_tolerance_secs, 2.5);
         assert_eq!(cfg.providers.lrclib.duration_tolerance_secs, 2.0);
+    }
+
+    #[test]
+    fn resets_selected_setting() {
+        let mut cfg = Config::default();
+        let mut st = SettingsState::new();
+        st.section = sections(&cfg).iter().position(|s| s.title == "Sync").unwrap();
+        cfg.sync.offset_ms = 420;
+        cfg.sync.smoothing = !Config::default().sync.smoothing;
+        let out = handle_key(&mut st, &mut cfg, key(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(matches!(out, SettingsOutcome::Changed));
+        assert_eq!(cfg.sync.offset_ms, Config::default().sync.offset_ms);
+        assert_ne!(cfg.sync.smoothing, Config::default().sync.smoothing);
+        let out = handle_key(&mut st, &mut cfg, key(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(matches!(out, SettingsOutcome::None));
+    }
+
+    #[test]
+    fn resets_provider_priority_and_state() {
+        let mut cfg = Config::default();
+        let mut st = SettingsState::new();
+        st.item = 2;
+        handle_key(&mut st, &mut cfg, key(KeyCode::Char('K'), KeyModifiers::SHIFT));
+        handle_key(&mut st, &mut cfg, key(KeyCode::Char(' '), KeyModifiers::NONE));
+        let out = handle_key(&mut st, &mut cfg, key(KeyCode::Char('r'), KeyModifiers::NONE));
+        assert!(matches!(out, SettingsOutcome::Changed));
+        assert_eq!(ordered_ids(&cfg), ordered_ids(&Config::default()));
+        assert!(cfg.providers.is_enabled("lrclib"));
+        assert_eq!(st.item, 2);
     }
 
     #[test]

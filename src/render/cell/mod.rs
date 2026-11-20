@@ -159,6 +159,7 @@ impl CellRenderer {
             background: input.lyrics.background_vocals,
             gap: input.appearance.line_gap,
             center: input.appearance.alignment == Alignment::Center,
+            header: input.appearance.show_header,
         };
         let layout = self.layout_for(input.prepared, prepared_id, opts);
         let prepared = input.prepared;
@@ -214,8 +215,10 @@ impl CellRenderer {
         let mut any_active = false;
         self.anims.begin_frame();
 
+        let mut last_item = None;
         for block in &layout.blocks {
-            let item_offset = block.item.map(|i| self.scroller.item_offset(i, input.wall)).unwrap_or(0.0);
+            last_item = block.item.or(last_item);
+            let item_offset = last_item.map(|i| self.scroller.item_offset(i, input.wall)).unwrap_or(0.0);
             let block_y = block.top as f64 - base + item_offset;
             if block_y > area.height as f64 + 1.0 || block_y + (block.rows.len() as f64) < -1.0 {
                 continue;
@@ -319,9 +322,9 @@ impl CellRenderer {
                     Some(ItemKind::Line(li)) => Some(li),
                     _ => None,
                 };
-                let link_row = matches!(row.kind, RowKind::Credit { .. }) && row.link.is_some();
-                let mut link_text = String::new();
-                let mut link_ink: Option<Ink> = None;
+                let link_row = matches!(row.kind, RowKind::Credit { .. }) && !row.links.is_empty();
+                let mut link_text = vec![String::new(); row.links.len()];
+                let mut link_ink: Vec<Option<Ink>> = vec![None; row.links.len()];
 
                 let bloom_edge = if style == VisualStyle::Bloom
                     && active_amount > 0.0
@@ -370,10 +373,10 @@ impl CellRenderer {
                     if x >= area.x + area.width {
                         continue;
                     }
-                    if link_row {
-                        link_text.push_str(&glyph.text);
+                    if link_row && let Some(li) = row.link_at(glyph.col) {
+                        link_text[li].push_str(&glyph.text);
                         ink.underline = true;
-                        link_ink.get_or_insert(ink);
+                        link_ink[li].get_or_insert(ink);
                     }
                     put(buf, x, sy, &glyph.text, ink, input, base_bg, bg);
                 }
@@ -414,15 +417,14 @@ impl CellRenderer {
                         }),
                     }
                 }
-                if link_row
-                    && let (Some(url), Some(ink)) = (row.link.clone(), link_ink)
-                {
+                for ((link, text), ink) in row.links.iter().zip(link_text).zip(link_ink) {
+                    let Some(ink) = ink else { continue };
                     let fg = shade(ink, input, base_bg);
                     info.links.push(LinkSpan {
-                        x: rx,
+                        x: rx + link.start,
                         y: sy,
-                        text: link_text,
-                        url,
+                        text,
+                        url: link.url.clone(),
                         fg,
                         bg,
                         bold: ink.bold,
@@ -473,7 +475,7 @@ impl CellRenderer {
             RowKind::Credit { emphasis } => {
                 let a = if all_sung { 0.8 } else { 0.5 };
                 let mut ink = Ink::new(if *emphasis { a } else { a * 0.8 });
-                ink.bold = *emphasis && row.link.is_some();
+                ink.bold = *emphasis && row.link_at(glyph.col).is_some();
                 return finish(ink);
             }
             RowKind::Notice => return finish(Ink::new(0.7)),

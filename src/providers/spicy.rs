@@ -343,7 +343,7 @@ struct Syl {
 
 fn source_label(source: Option<&str>) -> String {
     match source {
-        Some("spicy_lyrics") => "Spicy Lyrics community sync".into(),
+        Some("spicy_lyrics") => "Community sync".into(),
         Some("apple_music") => "Apple Music".into(),
         Some("spotify") => "Spotify".into(),
         _ => "Unknown source".into(),
