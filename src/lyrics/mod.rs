@@ -114,9 +114,39 @@ pub struct LyricLine {
     pub lead: VocalGroup,
     #[serde(default)]
     pub background: Vec<VocalGroup>,
+    #[serde(default)]
+    pub background_only: bool,
 }
 
 impl LyricLine {
+    pub fn normalize(&mut self, timed: bool) {
+        self.background.retain(|g| !g.syllables.is_empty());
+        if self.lead.syllables.is_empty() && !self.background.is_empty() {
+            let old = std::mem::replace(&mut self.lead, self.background.remove(0));
+            self.lead.roman = self.lead.roman.take().or(old.roman);
+            self.lead.translation = self.lead.translation.take().or(old.translation);
+            self.background_only = true;
+        }
+        if !timed {
+            return;
+        }
+        for g in std::iter::once(&mut self.lead).chain(self.background.iter_mut()) {
+            if let (Some(first), Some(last)) = (g.syllables.first(), g.syllables.last()) {
+                g.start = g.start.min(first.start);
+                g.end = g.end.max(last.end);
+            }
+        }
+        let start = std::iter::once(&self.lead)
+            .chain(self.background.iter())
+            .filter(|g| !g.syllables.is_empty())
+            .map(|g| g.start)
+            .fold(f64::MAX, f64::min);
+        if start < f64::MAX {
+            self.start = if self.background_only { start } else { self.start.min(start) };
+        }
+        self.end = self.end.max(self.lead.end).max(self.start);
+    }
+
     pub fn full_end(&self) -> f64 {
         self.background
             .iter()
@@ -171,7 +201,12 @@ impl Lyrics {
     }
 
     pub fn sort(&mut self) {
-        if self.kind != SyncKind::Static {
+        let timed = self.kind != SyncKind::Static;
+        for line in &mut self.lines {
+            line.normalize(timed);
+        }
+        self.lines.retain(|l| !l.lead.syllables.is_empty());
+        if timed {
             self.lines
                 .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
         }

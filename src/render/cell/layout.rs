@@ -434,6 +434,7 @@ mod tests {
                 opposite: true,
                 lead: VocalGroup::single("hello there".into(), 0.0, 1.0),
                 background: vec![],
+                background_only: false,
             }],
             credits: Credits {
                 provider: "X".into(),
