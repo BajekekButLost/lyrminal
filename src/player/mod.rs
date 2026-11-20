@@ -317,6 +317,35 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    #[ignore]
+    async fn live_clock_accuracy() {
+        let (_tx, mut rx) = spawn(PlayerConfig::default());
+        let mut clock = clock::PlaybackClock::default();
+        let mut last_value: Option<f64> = None;
+        let mut started = false;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(12);
+        while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            match ev {
+                PlayerEvent::Active(Some(s)) => {
+                    if !started {
+                        clock.reset(s.position, s.sampled_at, s.status == Status::Playing, s.rate);
+                        started = true;
+                    }
+                }
+                PlayerEvent::Position { position, at, seeked } => {
+                    let edge = last_value.is_some_and(|v| (v - position).abs() > 1e-6);
+                    clock.sample(position, at, seeked);
+                    if edge {
+                        println!("edge: reported {position:.3}  clock {:.3}  error {:+.0} ms", clock.raw(at), (clock.raw(at) - position) * 1000.0);
+                    }
+                    last_value = Some(position);
+                }
+                _ => {}
+            }
+        }
+    }
+
     fn info(bus: &str, process: &str, status: Status) -> PlayerInfo {
         PlayerInfo {
             bus: format!("{BUS_PREFIX}{bus}"),
