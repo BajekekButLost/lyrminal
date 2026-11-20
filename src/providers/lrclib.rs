@@ -193,6 +193,7 @@ fn convert(r: &Record) -> ProviderResult<Lyrics> {
                 opposite: false,
                 lead: VocalGroup::single(t.trim().to_string(), 0.0, 0.0),
                 background: Vec::new(),
+                background_only: false,
             })
             .collect();
         return Ok(Lyrics {
@@ -269,6 +270,7 @@ fn parse_lyricsfile(doc: &str, duration: Option<f64>) -> Option<Lyrics> {
             opposite: false,
             lead,
             background: Vec::new(),
+            background_only: false,
         });
     }
     if lines.is_empty() {

@@ -269,6 +269,7 @@ mod tests {
             opposite: false,
             lead: VocalGroup::single(text.into(), start, end),
             background: vec![],
+            background_only: false,
         }
     }
 
@@ -296,6 +297,24 @@ mod tests {
         assert!(matches!(p.items[3].kind, ItemKind::Interlude { .. }));
         assert_eq!(p.scroll_target(7.2), 1);
         assert_eq!(p.scroll_target(10.0), 3);
+    }
+
+    #[test]
+    fn interlude_ends_when_opening_background_starts() {
+        let mut first = line(6.0, 7.0, "lead");
+        first.background.push(VocalGroup::single("(intro)".into(), 4.0, 5.5));
+        let l = Lyrics {
+            kind: SyncKind::Syllable,
+            lines: vec![first],
+            credits: Credits::default(),
+            language: None,
+            instrumental: false,
+        };
+        let p = prepare(&l, opts());
+        assert_eq!(p.items.len(), 2);
+        assert!((p.items[0].end - 4.0).abs() < 1e-9);
+        assert!((p.items[1].start - 4.0).abs() < 1e-9);
+        assert_eq!(p.scroll_target(4.5), 1);
     }
 
     #[test]

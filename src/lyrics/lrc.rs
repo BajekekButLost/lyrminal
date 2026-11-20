@@ -77,6 +77,7 @@ pub fn parse(input: &str, credits: Credits, duration: Option<f64>) -> Option<Lyr
             opposite: false,
             lead,
             background: Vec::new(),
+            background_only: false,
         });
     }
     if lines.is_empty() {
