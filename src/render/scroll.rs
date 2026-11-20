@@ -61,6 +61,7 @@ pub struct ScrollInput<'a> {
     pub silence: f64,
     pub viewport: f64,
     pub manual: bool,
+    pub speed: f64,
 }
 
 impl Scroller {
@@ -91,7 +92,10 @@ impl Scroller {
             silence,
             viewport,
             manual,
+            speed,
         } = input;
+        let speed = speed.clamp(0.1, 5.0);
+        self.spring.frequency = speed;
         self.tweens.retain(|_, t| !t.done(now));
         if !self.initialized {
             self.initialized = true;
@@ -129,7 +133,7 @@ impl Scroller {
             return;
         }
         let old_base = self.base;
-        let duration = super::effects::scroll_duration(silence);
+        let duration = super::effects::scroll_duration(silence) / speed;
         let lo = tops.partition_point(|&y| y < old_base.min(desired) - viewport);
         let hi = tops.partition_point(|&y| y < old_base.max(desired) + viewport * 2.0);
         for (item, _) in tops.iter().enumerate().take(hi).skip(lo) {
@@ -140,7 +144,7 @@ impl Scroller {
                 continue;
             }
             let delay = if target_changed && item > target {
-                ripple_delay(item - target)
+                ripple_delay(item - target) / speed
             } else {
                 0.0
             };
@@ -177,6 +181,7 @@ mod tests {
             silence: 0.5,
             viewport: 20.0,
             manual: false,
+            speed: 1.0,
         };
         s.update(input(0.0, 0.0, 0));
         s.update(input(1.0, 3.0, 1));
@@ -199,6 +204,7 @@ mod tests {
             silence: 0.5,
             viewport: 20.0,
             manual: false,
+            speed: 1.0,
         };
         s.update(mk(0.0));
         s.update(mk(10.0));

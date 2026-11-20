@@ -9,7 +9,7 @@ use ratatui::style::{Modifier, Style};
 
 use self::layout::{Group, Layout, LayoutOptions, Row, RowKind, build, row_x};
 use super::effects::{self, EdgeWord, bloom, spring};
-use super::scroll::{ScrollInput, ScrollMode, Scroller};
+use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput, LinkSpan};
 use crate::anim::{Rgb, lerp};
 use crate::config::{Alignment, Background, VisualStyle};
@@ -163,7 +163,7 @@ impl CellRenderer {
         let style = input.style();
         let t = if style == VisualStyle::Bloom { input.t - bloom::CLOCK_LAG } else { input.t };
         let anchor = (area.height as f64 * 0.4).floor();
-        let target = prepared.scroll_target(t);
+        let (target, silence) = input.scroll_target(t);
         let auto_desired = if kind == SyncKind::Static {
             -1.0
         } else {
@@ -171,32 +171,17 @@ impl CellRenderer {
         };
         let manual = input.follow.manual || kind == SyncKind::Static;
         let desired = if manual { input.follow.offset } else { auto_desired };
-        let silence = prepared
-            .items
-            .get(target)
-            .map(|it| {
-                let prev_end = target
-                    .checked_sub(1)
-                    .and_then(|p| prepared.items.get(p))
-                    .map(|p| p.end)
-                    .unwrap_or(0.0);
-                (it.start - prev_end).max(0.0)
-            })
-            .unwrap_or(0.5);
         self.scroller.update(ScrollInput {
             now: input.wall,
             dt: input.dt,
             desired,
             target,
             tops: &layout.item_tops,
-            mode: if style == VisualStyle::Bloom {
-                ScrollMode::Ripple
-            } else {
-                ScrollMode::Rigid
-            },
+            mode: input.scroll_mode(),
             silence,
             viewport: area.height as f64,
             manual,
+            speed: input.scroll.speed,
         });
         let base = self.scroller.base();
         info.base = if manual { input.follow.offset } else { auto_desired };
