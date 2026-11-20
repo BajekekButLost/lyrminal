@@ -18,6 +18,7 @@ use crate::lyrics::process::{self, ItemKind, Prepared, State};
 use crate::lyrics::{LyricLine, SyncKind, VocalGroup};
 
 const RASTER_STEP: f32 = 0.05;
+const BLUR_KEY_SCALE: f32 = 100.0;
 
 pub struct Fonts {
     pub system: FontSystem,
@@ -558,7 +559,7 @@ impl PixelRenderer {
                 };
                 self.stamp_glyph(&mut mask, &g.glyph, origin, scale, |_| 1.0);
             }
-            let blurred = if blur > 0 { mask.blurred(blur as f32) } else { mask };
+            let blurred = if blur > 0 { mask.blurred(blur as f32 / BLUR_KEY_SCALE) } else { mask };
             self.masks.insert(key, blurred);
         }
         self.masks.get(&key)
@@ -818,7 +819,7 @@ impl PixelRenderer {
             }
             self.forget_block(bi);
             let rest = if state == State::Active { State::NotSung } else { state };
-            let blur = look.depth.round().max(0.0) as u16;
+            let blur = (look.depth.max(0.0) as f32 * BLUR_KEY_SCALE).round() as u16;
             let idle = state == State::NotSung;
             for pi in 0..part_count {
                 let part = self.layout.as_ref().unwrap().blocks[bi].parts[pi].clone();
@@ -856,7 +857,7 @@ impl PixelRenderer {
         if input.appearance.glow && !glows.is_empty() {
             let visible = (1.0 - block.blur / (0.15 * size)).clamp(0.0, 1.0);
             for (key, gx, gy, g, gsize) in glows {
-                if let Some(m) = self.glow_mask(key, (gsize * 0.12).max(2.0)) {
+                if let Some(m) = self.glow_mask(key, (gsize * 0.078).max(2.4)) {
                     let a = (g * 0.45 * visible).min(1.0);
                     self.canvas.draw_alpha(
                         &m.data,
@@ -870,7 +871,7 @@ impl PixelRenderer {
                 }
             }
         }
-        let layer = if block.blur >= 0.5 { layer.blurred(block.blur) } else { layer };
+        let layer = if block.blur > 0.05 { layer.blurred(block.blur) } else { layer };
         let text = input.theme.text;
         self.canvas.draw_alpha(
             &layer.data,
