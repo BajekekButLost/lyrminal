@@ -23,6 +23,7 @@ use crate::ui::settings::{self, SettingsAction, SettingsOutcome, SettingsState};
 
 const FETCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const TOAST_FOR: Duration = Duration::from_secs(3);
+const MOUSE_SCROLL_ROWS: f64 = 4.0;
 
 pub enum LyricsState {
     NoPlayer,
@@ -566,8 +567,8 @@ impl App {
                 }
             }
             Event::Mouse(m) if self.cfg.appearance.mouse && matches!(self.overlay, Overlay::None) => match m.kind {
-                MouseEventKind::ScrollDown => self.scroll_by(2.0),
-                MouseEventKind::ScrollUp => self.scroll_by(-2.0),
+                MouseEventKind::ScrollDown => self.scroll_by(MOUSE_SCROLL_ROWS),
+                MouseEventKind::ScrollUp => self.scroll_by(-MOUSE_SCROLL_ROWS),
                 MouseEventKind::Down(MouseButton::Left) => self.on_press(m.column, m.row),
                 MouseEventKind::Drag(MouseButton::Left) => {
                     if self.scrub.is_some()
