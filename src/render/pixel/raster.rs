@@ -20,38 +20,64 @@ impl Mask {
         }
     }
 
-    pub fn stamp_shaded(&mut self, src: &[u8], sw: usize, sh: usize, sx: i32, sy: i32, mut shade: impl FnMut(i32) -> f32) {
-        let mut cols: Vec<f32> = Vec::with_capacity(sw);
-        for col in 0..sw {
-            cols.push(shade(sx + col as i32).clamp(0.0, 1.0));
+    #[allow(clippy::too_many_arguments)]
+    pub fn stamp_resampled(&mut self, src: &[u8], sw: usize, sh: usize, left: f32, top: f32, k: f32, mut shade: impl FnMut(i32) -> f32) {
+        if sw == 0 || sh == 0 || k <= 0.0 {
+            return;
         }
-        for row in 0..sh {
-            let ty = sy + row as i32 - self.y;
-            if ty < 0 || ty as usize >= self.h {
+        let x0 = (left.floor() as i32).max(self.x);
+        let x1 = ((left + sw as f32 * k).ceil() as i32).min(self.x + self.w as i32);
+        let y0 = (top.floor() as i32).max(self.y);
+        let y1 = ((top + sh as f32 * k).ceil() as i32).min(self.y + self.h as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let inv = 1.0 / k;
+        let at = |c: i32, r: i32| -> f32 {
+            if c < 0 || r < 0 || c as usize >= sw || r as usize >= sh {
+                0.0
+            } else {
+                src[r as usize * sw + c as usize] as f32
+            }
+        };
+        let cols: Vec<(i32, f32, f32)> = (x0..x1)
+            .map(|tx| {
+                let u = (tx as f32 + 0.5 - left) * inv - 0.5;
+                let uf = u.floor();
+                (uf as i32, u - uf, shade(tx).clamp(0.0, 1.0))
+            })
+            .collect();
+        for ty in y0..y1 {
+            let v = (ty as f32 + 0.5 - top) * inv - 0.5;
+            let vf = v.floor();
+            let (r, fy) = (vf as i32, v - vf);
+            if r < -1 || r >= sh as i32 {
                 continue;
             }
-            for (col, a) in cols.iter().enumerate() {
-                let tx = sx + col as i32 - self.x;
-                if tx < 0 || tx as usize >= self.w {
+            let row = (ty - self.y) as usize * self.w;
+            for (i, &(c, fx, a)) in cols.iter().enumerate() {
+                if a <= 0.0 || c < -1 || c >= sw as i32 {
                     continue;
                 }
-                let v = src[row * sw + col] as f32 / 255.0 * a;
-                if v <= 0.0 {
+                let top_row = at(c, r) + (at(c + 1, r) - at(c, r)) * fx;
+                let bottom_row = at(c, r + 1) + (at(c + 1, r + 1) - at(c, r + 1)) * fx;
+                let s = (top_row + (bottom_row - top_row) * fy) / 255.0 * a;
+                if s <= 0.0 {
                     continue;
                 }
-                let d = &mut self.data[ty as usize * self.w + tx as usize];
+                let d = &mut self.data[row + (x0 - self.x) as usize + i];
                 let cur = *d as f32 / 255.0;
-                *d = ((v + cur * (1.0 - v)) * 255.0).round().min(255.0) as u8;
+                *d = ((s + cur * (1.0 - s)) * 255.0).round().min(255.0) as u8;
             }
         }
     }
 
-    pub fn blurred(&self, radius: f32) -> Mask {
-        let r = radius.round() as usize;
-        if r == 0 {
+    pub fn blurred(&self, sigma: f32) -> Mask {
+        if sigma < 0.05 {
             return self.clone();
         }
-        let pad = r * 3;
+        let r = box_radius(sigma);
+        let pad = (sigma * 3.0).ceil() as usize + 1;
         let w = self.w + pad * 2;
         let h = self.h + pad * 2;
         let mut buf = vec![0f32; w * h];
@@ -60,11 +86,10 @@ impl Mask {
                 buf[(y + pad) * w + x + pad] = self.data[y * self.w + x] as f32;
             }
         }
-        let pass = (r as f32 / 1.7).ceil().max(1.0) as usize;
         let mut tmp = vec![0f32; w * h];
         for _ in 0..3 {
-            box_h(&buf, &mut tmp, w, h, pass);
-            box_v(&tmp, &mut buf, w, h, pass);
+            box_pass(&buf, &mut tmp, h, w, w, 1, r);
+            box_pass(&tmp, &mut buf, w, h, 1, w, r);
         }
         Mask {
             w,
@@ -76,40 +101,46 @@ impl Mask {
     }
 }
 
-fn box_h(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize) {
-    let div = (2 * r + 1) as f32;
-    for y in 0..h {
-        let row = &src[y * w..(y + 1) * w];
-        let mut acc = 0.0;
-        for i in 0..=r.min(w - 1) {
-            acc += row[i];
+fn box_radius(sigma: f32) -> f32 {
+    let target = sigma * sigma / 3.0;
+    let mut p = 0.0f32;
+    loop {
+        let a = p * (p + 1.0) * (2.0 * p + 1.0) / 3.0;
+        let b = (p + 1.0) * (p + 1.0);
+        let c = 2.0 * p + 1.0;
+        let f = (target * c - a) / (2.0 * (b - target));
+        if (0.0..1.0).contains(&f) || p > 64.0 {
+            return p + f.clamp(0.0, 1.0);
         }
-        for x in 0..w {
-            dst[y * w + x] = acc / div;
-            if x + r + 1 < w {
-                acc += row[x + r + 1];
-            }
-            if x >= r {
-                acc -= row[x - r];
-            }
-        }
+        p += 1.0;
     }
 }
 
-fn box_v(src: &[f32], dst: &mut [f32], w: usize, h: usize, r: usize) {
-    let div = (2 * r + 1) as f32;
-    for x in 0..w {
+fn box_pass(src: &[f32], dst: &mut [f32], lines: usize, len: usize, line_step: usize, step: usize, r: f32) {
+    let p = r.floor() as usize;
+    let f = r - p as f32;
+    let div = 2.0 * r + 1.0;
+    for l in 0..lines {
+        let base = l * line_step;
+        let at = |i: usize| src[base + i * step];
         let mut acc = 0.0;
-        for i in 0..=r.min(h - 1) {
-            acc += src[i * w + x];
+        for i in 0..=p.min(len - 1) {
+            acc += at(i);
         }
-        for y in 0..h {
-            dst[y * w + x] = acc / div;
-            if y + r + 1 < h {
-                acc += src[(y + r + 1) * w + x];
+        for x in 0..len {
+            let mut edge = 0.0;
+            if x > p {
+                edge += at(x - p - 1);
             }
-            if y >= r {
-                acc -= src[(y - r) * w + x];
+            if x + p + 1 < len {
+                edge += at(x + p + 1);
+            }
+            dst[base + x * step] = (acc + f * edge) / div;
+            if x + p + 1 < len {
+                acc += at(x + p + 1);
+            }
+            if x >= p {
+                acc -= at(x - p);
             }
         }
     }
@@ -260,6 +291,32 @@ mod tests {
         let total: u32 = b.data.iter().map(|v| *v as u32).sum();
         assert!(total > 150 && total < 400);
         assert!(b.data.iter().filter(|v| **v > 0).count() > 9);
+    }
+
+    #[test]
+    fn blur_widens_continuously() {
+        let mut src = Mask::new(0, 0, 81, 81);
+        for row in 0..81 {
+            src.data[row * 81 + 40] = 255;
+        }
+        let mut last = 0.0;
+        for step in 1..=40 {
+            let sigma = step as f32 * 0.1;
+            let b = src.blurred(sigma);
+            let centre = 40.0 - b.x as f64;
+            let (mut var, mut mass) = (0.0, 0.0);
+            for (i, v) in b.data.iter().enumerate() {
+                let x = (i % b.w) as f64 - centre;
+                var += *v as f64 * x * x;
+                mass += *v as f64;
+            }
+            let measured = (var / mass).sqrt();
+            assert!(measured > last, "blur stopped growing at sigma {sigma}");
+            if sigma >= 1.0 {
+                assert!((measured - sigma as f64).abs() < 0.15 * sigma as f64, "sigma {sigma} measured {measured}");
+            }
+            last = measured;
+        }
     }
 
     #[test]

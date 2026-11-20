@@ -226,6 +226,14 @@ pub enum Alignment {
     Center,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SyllableSpacing {
+    #[default]
+    Joined,
+    Separate,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct AppearanceConfig {
@@ -249,6 +257,7 @@ pub struct AppearanceConfig {
     pub font_scale: f32,
     pub glow: bool,
     pub emphasis: bool,
+    pub syllable_spacing: SyllableSpacing,
     pub mouse: bool,
 }
 
@@ -275,6 +284,7 @@ impl Default for AppearanceConfig {
             font_scale: 2.2,
             glow: false,
             emphasis: true,
+            syllable_spacing: SyllableSpacing::Joined,
             mouse: true,
         }
     }
