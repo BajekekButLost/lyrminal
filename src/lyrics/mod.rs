@@ -1,5 +1,6 @@
 pub mod lrc;
 pub mod process;
+pub mod ttml;
 
 use serde::{Deserialize, Serialize};
 
@@ -133,6 +134,8 @@ pub struct Contributor {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Credits {
     pub provider: String,
+    #[serde(default)]
+    pub provider_url: Option<String>,
     pub source: Option<String>,
     pub songwriters: Vec<String>,
     pub contributors: Vec<Contributor>,
