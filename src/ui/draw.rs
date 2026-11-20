@@ -90,7 +90,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     }
     let area = f.area();
     let has_track = app.track.is_some();
-    let header_h = if app.cfg.appearance.show_header && has_track { 5 } else { 0 };
+    let header_h = if app.cfg.appearance.show_header && has_track { 6 } else { 0 };
     let progress_h = if app.cfg.appearance.show_progress && has_track { 1 } else { 0 };
     let status_h = if app.cfg.appearance.show_status { 1 } else { 0 };
     let [header, lyrics_area, progress, status] = Layout::vertical([
@@ -104,9 +104,11 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     let art = if header_h > 0 { draw_header(f, app, header) } else { None };
     let mut links = Vec::new();
     draw_lyrics(f, app, lyrics_area, now, dt, &mut links);
-    if progress_h > 0 {
-        draw_progress(f, app, progress, now);
-    }
+    app.progress_bar = if progress_h > 0 {
+        Some(draw_progress(f, app, progress, now))
+    } else {
+        None
+    };
     if status_h > 0 {
         draw_status(f, app, status);
     }
@@ -132,7 +134,7 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Option<Placement> {
         x: area.x + 2,
         y: area.y + 1,
         width: area.width.saturating_sub(4),
-        height: area.height.saturating_sub(1),
+        height: area.height.saturating_sub(2),
     };
     let rows = 4u16.min(inner.height);
     let mut text_x = inner.x;
@@ -341,9 +343,9 @@ fn draw_pixel_credits(
     }
 }
 
-fn draw_progress(f: &mut Frame, app: &App, area: Rect, now: Instant) {
+fn draw_progress(f: &mut Frame, app: &App, area: Rect, now: Instant) -> (u16, u16, u16) {
     let theme = &app.theme;
-    let pos = app.position(now);
+    let pos = app.scrub.unwrap_or_else(|| app.position(now));
     let len = app.track.as_ref().and_then(|t| t.length).unwrap_or(0.0);
     let left = fmt_time(pos);
     let right = if len > 0.0 { fmt_time(len) } else { "--:--".into() };
@@ -352,16 +354,23 @@ fn draw_progress(f: &mut Frame, app: &App, area: Rect, now: Instant) {
         .width
         .saturating_sub(pad * 2 + left.len() as u16 + right.len() as u16 + 2) as usize;
     let filled = if len > 0.0 { ((pos / len).clamp(0.0, 1.0) * bar_w as f64).round() as usize } else { 0 };
+    let (head, rest) = if app.scrub.is_some() && filled < bar_w {
+        ("●", bar_w - filled - 1)
+    } else {
+        ("", bar_w - filled)
+    };
     let line = Line::from(vec![
         Span::raw(" ".repeat(pad as usize)),
-        Span::styled(left, ink(theme, 0.6)),
+        Span::styled(left.clone(), ink(theme, 0.6)),
         Span::raw(" "),
         Span::styled("━".repeat(filled), accent(theme)),
-        Span::styled("─".repeat(bar_w - filled), ink(theme, 0.22)),
+        Span::styled(head, accent(theme)),
+        Span::styled("─".repeat(rest), ink(theme, 0.22)),
         Span::raw(" "),
         Span::styled(right, ink(theme, 0.6)),
     ]);
     f.render_widget(Paragraph::new(line), area);
+    (area.y, area.x + pad + left.len() as u16 + 1, bar_w as u16)
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
