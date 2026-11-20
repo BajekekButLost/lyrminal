@@ -619,7 +619,7 @@ impl PixelRenderer {
             }
             for pi in 0..part_count {
                 let part = self.layout.as_ref().unwrap().blocks[bi].parts[pi].clone();
-                self.draw_live_part(input, &part, bi, li, it, state, t, x0, y, clip, glow_color);
+                self.draw_live_part(input, &part, bi, li, state, t, x0, y, clip, glow_color);
             }
         }
         info.animating = animating;
@@ -637,7 +637,6 @@ impl PixelRenderer {
         part: &Part,
         bi: usize,
         li: usize,
-        it: process::Item,
         state: State,
         t: f64,
         x0: f32,

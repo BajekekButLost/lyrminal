@@ -24,7 +24,6 @@ const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 pub struct DrawOutput {
     pub art: Option<Placement>,
     pub links: Vec<LinkSpan>,
-    pub lyrics_area: Rect,
     pub pixel: bool,
 }
 
@@ -122,7 +121,6 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     DrawOutput {
         art: if overlay_open { None } else { art },
         links: if overlay_open { Vec::new() } else { links },
-        lyrics_area,
         pixel,
     }
 }
@@ -648,7 +646,7 @@ fn draw_syncs(f: &mut Frame, app: &App) {
             }
             SyncRow::Header { provider, status } => {
                 let mut spans = vec![Span::styled(
-                    format!("{}", provider_name(provider)),
+                    provider_name(provider).to_string(),
                     Style::default().fg(theme.accent.to_color()).bg(bg.to_color()).add_modifier(Modifier::BOLD),
                 )];
                 if let Some(s) = status {

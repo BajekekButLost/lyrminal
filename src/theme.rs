@@ -55,7 +55,7 @@ impl Theme {
         let (ah, as_, al) = p.accent.to_hsl();
         let bg_top = Rgb::from_hsl(ah, (as_ * 0.75).min(0.6), 0.17);
         let bg_bottom = Rgb::from_hsl(h, (s * 0.7).min(0.55), 0.08);
-        let accent = Rgb::from_hsl(ah, as_.max(0.45).min(0.9), al.clamp(0.62, 0.78));
+        let accent = Rgb::from_hsl(ah, as_.clamp(0.45, 0.9), al.clamp(0.62, 0.78));
         let text = Rgb::WHITE.mix(accent, 0.06);
         match cfg.background {
             Background::None => Self {
@@ -85,10 +85,6 @@ impl Theme {
         }
         let t = y as f32 / (height - 1) as f32;
         self.bg_top.mix(self.bg_bottom, t)
-    }
-
-    pub fn ink(&self, alpha: f32, bg: Rgb) -> Rgb {
-        bg.mix(self.text, alpha)
     }
 }
 

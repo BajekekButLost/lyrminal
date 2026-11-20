@@ -39,7 +39,6 @@ pub enum MediaKind {
     Track,
     Episode,
     Ad,
-    Unknown,
 }
 
 #[derive(Debug, Clone, PartialEq)]

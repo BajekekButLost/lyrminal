@@ -261,10 +261,6 @@ impl Rgb {
         Self { r, g, b }
     }
 
-    pub fn from_u8(r: u8, g: u8, b: u8) -> Self {
-        Self::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
-    }
-
     pub fn to_u8(self) -> [u8; 3] {
         [
             (self.r.clamp(0.0, 1.0) * 255.0).round() as u8,
@@ -280,10 +276,6 @@ impl Rgb {
             self.g + (other.g - self.g) * t,
             self.b + (other.b - self.b) * t,
         )
-    }
-
-    pub fn scale(self, k: f32) -> Rgb {
-        Rgb::new(self.r * k, self.g * k, self.b * k)
     }
 
     pub fn luminance(self) -> f32 {

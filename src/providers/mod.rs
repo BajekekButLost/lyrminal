@@ -15,8 +15,6 @@ use tokio::sync::Mutex;
 use crate::config::{Config, MatchTier};
 use crate::lyrics::{Lyrics, SyncKind};
 
-pub const CONTACT_URL: &str = "https://bajekek.com";
-pub const CONTACT_EMAIL: &str = "me@bajekek.com";
 pub const USER_AGENT: &str = concat!(
     "Lyrminal v",
     env!("CARGO_PKG_VERSION"),

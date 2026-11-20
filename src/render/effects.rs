@@ -36,7 +36,6 @@ pub mod spring {
     pub const LINE_UNLIT: f32 = 0.38;
     pub const BG_UNLIT: f32 = 0.3;
     pub const BG_LIT: f32 = 0.6;
-    pub const EMPHASIS_MIN: f64 = 1.0;
     pub const LETTER_TAIL: f64 = 0.25;
 }
 
@@ -89,10 +88,6 @@ pub fn spring_letter_fill(t: f64, start: f64, end: f64) -> f64 {
 
 pub fn neighbour_glow(distance: f64) -> f64 {
     1.0 / (1.0 + 0.9 * distance)
-}
-
-pub fn neighbour_scale(distance: f64) -> f64 {
-    1.0 / (1.0 + distance.powf(2.8))
 }
 
 pub fn bloom_flame(elapsed: f64, duration: f64, letters: usize, index: usize) -> f64 {
