@@ -47,8 +47,18 @@ fn shm_dir() -> PathBuf {
     if shm.is_dir() { shm } else { std::env::temp_dir() }
 }
 
+fn temp_path(seq: u64) -> PathBuf {
+    shm_dir().join(format!("lyrminal-tty-graphics-protocol-{}-{seq}.rgba", std::process::id()))
+}
+
+pub fn forget_old_temp_files(seq: u64, keep: u64) {
+    if seq > keep {
+        let _ = std::fs::remove_file(temp_path(seq - keep));
+    }
+}
+
 pub fn transmit_temp_file(out: &mut impl Write, id: u32, width: u32, height: u32, rgba: &[u8], seq: u64) -> io::Result<()> {
-    let path = shm_dir().join(format!("lyrminal-tty-graphics-protocol-{}-{id}-{seq}.rgba", std::process::id()));
+    let path = temp_path(seq);
     std::fs::write(&path, rgba)?;
     let encoded = STANDARD.encode(path.to_string_lossy().as_bytes());
     write!(out, "\x1b_Ga=t,t=t,f=32,s={width},v={height},i={id},q=2;{encoded}\x1b\\")

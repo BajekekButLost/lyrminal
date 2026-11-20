@@ -209,7 +209,7 @@ pub fn text_rows(text: &str, width: u16, kind: RowKind, align: Align, link: Opti
     rows_from(wrap(plain_tokens(text), width), kind, align, link)
 }
 
-fn credit_rows(credits: &Credits, width: u16, align: Align) -> Vec<Row> {
+pub fn credit_rows(credits: &Credits, width: u16, align: Align) -> Vec<Row> {
     let mut rows = Vec::new();
     if !credits.songwriters.is_empty() {
         rows.extend(text_rows(
