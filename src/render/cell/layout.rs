@@ -49,7 +49,20 @@ pub struct Row {
     pub align: Align,
     pub row_in_group: usize,
     pub rows_in_group: usize,
-    pub link: Option<String>,
+    pub links: Vec<RowLink>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RowLink {
+    pub start: u16,
+    pub end: u16,
+    pub url: String,
+}
+
+impl Row {
+    pub fn link_at(&self, col: u16) -> Option<usize> {
+        self.links.iter().position(|l| col >= l.start && col < l.end)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -74,6 +87,7 @@ pub struct LayoutOptions {
     pub background: bool,
     pub gap: u16,
     pub center: bool,
+    pub header: bool,
 }
 
 struct Token {
@@ -191,23 +205,85 @@ fn rows_from(glyph_rows: Vec<Vec<Glyph>>, kind: RowKind, align: Align, link: Opt
     glyph_rows
         .into_iter()
         .enumerate()
-        .map(|(i, glyphs)| Row {
-            width: glyphs.last().map(|g| g.col + g.width).unwrap_or(0),
-            kind: kind.clone(),
-            glyphs,
-            align,
-            row_in_group: i,
-            rows_in_group: n,
-            link: link.clone(),
+        .map(|(i, glyphs)| {
+            let width = glyphs.last().map(|g| g.col + g.width).unwrap_or(0);
+            Row {
+                width,
+                kind: kind.clone(),
+                glyphs,
+                align,
+                row_in_group: i,
+                rows_in_group: n,
+                links: link
+                    .iter()
+                    .map(|url| RowLink {
+                        start: 0,
+                        end: width,
+                        url: url.clone(),
+                    })
+                    .collect(),
+            }
         })
         .collect()
+}
+
+fn joined_row(segments: &[(String, Option<String>)], kind: RowKind, align: Align) -> Row {
+    let mut glyphs: Vec<Glyph> = Vec::new();
+    let mut links = Vec::new();
+    let mut col = 0u16;
+    for (i, (text, url)) in segments.iter().enumerate() {
+        if i > 0
+            && let Some(prev) = glyphs.last().cloned()
+        {
+            for (s, space) in [(" ", true), ("·", false), (" ", true)] {
+                glyphs.push(Glyph {
+                    text: s.into(),
+                    width: 1,
+                    col,
+                    space,
+                    ..prev.clone()
+                });
+                col += 1;
+            }
+        }
+        let start = col;
+        let words = glyphs.last().map(|g| g.word + 1).unwrap_or(0);
+        for row in wrap(plain_tokens(text), u16::MAX / 2) {
+            for mut g in row {
+                g.col += start;
+                g.word += words;
+                col = g.col + g.width;
+                glyphs.push(g);
+            }
+        }
+        if let Some(url) = url {
+            links.push(RowLink {
+                start,
+                end: col,
+                url: url.clone(),
+            });
+        }
+    }
+    Row {
+        width: col,
+        kind,
+        glyphs,
+        align,
+        row_in_group: 0,
+        rows_in_group: 1,
+        links,
+    }
+}
+
+pub fn provider_in_header(credits: &Credits) -> bool {
+    credits.provider == crate::providers::spicy::NAME
 }
 
 pub fn text_rows(text: &str, width: u16, kind: RowKind, align: Align, link: Option<String>) -> Vec<Row> {
     rows_from(wrap(plain_tokens(text), width), kind, align, link)
 }
 
-pub fn credit_rows(credits: &Credits, width: u16, align: Align) -> Vec<Row> {
+pub fn credit_rows(credits: &Credits, width: u16, align: Align, header: bool) -> Vec<Row> {
     let mut rows = Vec::new();
     if !credits.songwriters.is_empty() {
         rows.extend(text_rows(
@@ -218,27 +294,36 @@ pub fn credit_rows(credits: &Credits, width: u16, align: Align) -> Vec<Row> {
             None,
         ));
     }
-    let mut short = credits.provider.clone();
-    if let Some(src) = &credits.source {
-        short.push_str(&format!(" · {src}"));
-    }
-    let long = format!("Lyrics provided by {short}");
-    let provided = if UnicodeWidthStr::width(long.as_str()) <= width as usize { long } else { short };
-    rows.extend(text_rows(
-        &provided,
-        width,
-        RowKind::Credit { emphasis: true },
-        align,
-        credits.provider_url.clone(),
-    ));
-    for c in &credits.contributors {
+    if !(header && provider_in_header(credits)) {
+        let mut short = credits.provider.clone();
+        if let Some(src) = &credits.source {
+            short.push_str(&format!(" · {src}"));
+        }
+        let long = format!("Lyrics provided by {short}");
+        let provided = if UnicodeWidthStr::width(long.as_str()) <= width as usize { long } else { short };
         rows.extend(text_rows(
-            &format!("{} {}", c.role, c.name),
+            &provided,
             width,
             RowKind::Credit { emphasis: true },
             align,
-            c.url.clone(),
+            credits.provider_url.clone(),
         ));
+    }
+    let segments: Vec<(String, Option<String>)> = credits
+        .contributors
+        .iter()
+        .map(|c| (format!("{} {}", c.role, c.name), c.url.clone()))
+        .collect();
+    if segments.is_empty() {
+        return rows;
+    }
+    let joined = joined_row(&segments, RowKind::Credit { emphasis: true }, align);
+    if joined.width <= width {
+        rows.push(joined);
+    } else {
+        for (text, url) in segments {
+            rows.extend(text_rows(&text, width, RowKind::Credit { emphasis: true }, align, url));
+        }
     }
     rows
 }
@@ -271,7 +356,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
                 align,
                 row_in_group: 0,
                 rows_in_group: 1,
-                link: None,
+                links: Vec::new(),
             }),
             ItemKind::Line(li) => {
                 let line = &prepared.lyrics.lines[li];
@@ -342,7 +427,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
                 align,
                 row_in_group: 0,
                 rows_in_group: 1,
-                link: None,
+                links: Vec::new(),
             });
         }
         item_tops.push(top as f64);
@@ -363,7 +448,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
     }
 
     let credit_align = if opts.center { Align::Center } else { Align::Left };
-    let credits = credit_rows(&prepared.lyrics.credits, width, credit_align);
+    let credits = credit_rows(&prepared.lyrics.credits, width, credit_align, opts.header);
     let h = credits.len();
     top += 1;
     blocks.push(Block {
@@ -463,26 +548,71 @@ mod tests {
                 background: true,
                 gap: 1,
                 center: false,
+                header: true,
             },
         );
         assert_eq!(l.blocks[0].rows[0].align, Align::Right);
-        assert!(l.blocks.last().unwrap().rows.iter().any(|r| r.link.is_none()));
+        assert!(l.blocks.last().unwrap().rows.iter().any(|r| r.links.is_empty()));
         assert_eq!(l.item_tops.len(), 1);
     }
 
-    #[test]
-    fn provider_credit_stays_on_one_line() {
-        let credits = Credits {
-            provider: "Spicy Lyrics".into(),
+    fn row_text(row: &Row) -> String {
+        row.glyphs.iter().map(|g| g.text.as_str()).collect()
+    }
+
+    fn spicy_credits() -> Credits {
+        Credits {
+            provider: crate::providers::spicy::NAME.into(),
             source: Some("Community sync".into()),
+            contributors: vec![
+                crate::lyrics::Contributor {
+                    role: "Synced by".into(),
+                    name: "ana".into(),
+                    url: Some("https://x/ana".into()),
+                },
+                crate::lyrics::Contributor {
+                    role: "Uploaded by".into(),
+                    name: "bo".into(),
+                    url: Some("https://x/bo".into()),
+                },
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn spicy_credit_is_one_line_under_the_header() {
+        let rows = credit_rows(&spicy_credits(), 60, Align::Left, true);
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row_text(row), "Synced by ana · Uploaded by bo");
+        assert_eq!(row.links.len(), 2);
+        assert_eq!((row.links[0].start, row.links[0].end), (0, 13));
+        assert_eq!((row.links[1].start, row.links[1].end), (16, 30));
+        assert_eq!(row.link_at(14), None);
+        assert_eq!(row.link_at(20), Some(1));
+    }
+
+    #[test]
+    fn spicy_credit_names_the_provider_without_the_header() {
+        let rows = credit_rows(&spicy_credits(), 60, Align::Left, false);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(row_text(&rows[0]), "Lyrics provided by Spicy Lyrics · Community sync");
+        let narrow = credit_rows(&spicy_credits(), 20, Align::Left, true);
+        assert_eq!(narrow.len(), 2);
+        assert_eq!(row_text(&narrow[1]), "Uploaded by bo");
+    }
+
+    #[test]
+    fn other_providers_keep_their_credit_line() {
+        let credits = Credits {
+            provider: "lrc.red".into(),
+            provider_url: Some("https://lrc.red".into()),
             ..Default::default()
         };
-        let text = |rows: &[Row]| rows[0].glyphs.iter().map(|g| g.text.as_str()).collect::<String>();
-        let wide = credit_rows(&credits, 60, Align::Left);
-        assert_eq!(wide.len(), 1);
-        assert_eq!(text(&wide), "Lyrics provided by Spicy Lyrics · Community sync");
-        let narrow = credit_rows(&credits, 32, Align::Left);
-        assert_eq!(narrow.len(), 1);
-        assert_eq!(text(&narrow), "Spicy Lyrics · Community sync");
+        let rows = credit_rows(&credits, 60, Align::Left, true);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(row_text(&rows[0]), "Lyrics provided by lrc.red");
+        assert_eq!(rows[0].links[0].url, "https://lrc.red");
     }
 }
