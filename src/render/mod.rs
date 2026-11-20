@@ -4,7 +4,7 @@ pub mod pixel;
 pub mod scroll;
 
 use crate::anim::Rgb;
-use crate::config::{AppearanceConfig, LyricsConfig, VisualStyle};
+use crate::config::{AppearanceConfig, LyricsConfig, ScrollAnimation, ScrollConfig, VisualStyle};
 use crate::lyrics::process::Prepared;
 use crate::theme::Theme;
 
@@ -22,6 +22,7 @@ pub struct FrameInput<'a> {
     pub theme: &'a Theme,
     pub appearance: &'a AppearanceConfig,
     pub lyrics: &'a LyricsConfig,
+    pub scroll: &'a ScrollConfig,
     pub follow: &'a Follow,
     pub screen_height: u16,
     pub show_cursor: bool,
@@ -30,6 +31,31 @@ pub struct FrameInput<'a> {
 impl FrameInput<'_> {
     pub fn style(&self) -> VisualStyle {
         self.appearance.style
+    }
+
+    pub fn scroll_mode(&self) -> scroll::ScrollMode {
+        match self.scroll.animation {
+            ScrollAnimation::Staggered => scroll::ScrollMode::Ripple,
+            ScrollAnimation::Smooth => scroll::ScrollMode::Rigid,
+        }
+    }
+
+    pub fn scroll_target(&self, t: f64) -> (usize, f64) {
+        let prepared = self.prepared;
+        let target = prepared.scroll_target(t + self.scroll.lead_ms as f64 / 1000.0);
+        let silence = prepared
+            .items
+            .get(target)
+            .map(|it| {
+                let prev_end = target
+                    .checked_sub(1)
+                    .and_then(|p| prepared.items.get(p))
+                    .map(|p| p.end)
+                    .unwrap_or(0.0);
+                (it.start - prev_end).max(0.0)
+            })
+            .unwrap_or(0.5);
+        (target, silence)
     }
 }
 

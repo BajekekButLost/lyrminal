@@ -8,7 +8,7 @@ use ratatui::layout::Rect;
 
 use self::raster::{Canvas, Mask};
 use super::effects::{self, EdgeWord, bloom, spring};
-use super::scroll::{ScrollInput, ScrollMode, Scroller};
+use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput};
 use crate::anim::{Rgb, Spring, lerp};
 use crate::config::{Alignment, Background, VisualStyle};
@@ -481,7 +481,7 @@ impl PixelRenderer {
         let kind = prepared.lyrics.kind;
         let t = if style == VisualStyle::Bloom { input.t - bloom::CLOCK_LAG } else { input.t };
         let anchor = (lh * 0.4) as f64;
-        let target = prepared.scroll_target(t);
+        let (target, silence) = input.scroll_target(t);
         let (item_tops, total, credits_top) = {
             let l = self.layout.as_ref().unwrap();
             (l.item_tops.clone(), l.total, l.credits_top)
@@ -493,24 +493,17 @@ impl PixelRenderer {
         };
         let manual = input.follow.manual || kind == SyncKind::Static;
         let desired = if manual { input.follow.offset * ch as f64 } else { auto_desired };
-        let silence = prepared
-            .items
-            .get(target)
-            .map(|it| {
-                let prev_end = target.checked_sub(1).and_then(|p| prepared.items.get(p)).map(|p| p.end).unwrap_or(0.0);
-                (it.start - prev_end).max(0.0)
-            })
-            .unwrap_or(0.5);
         self.scroller.update(ScrollInput {
             now: input.wall,
             dt: input.dt,
             desired,
             target,
             tops: &item_tops,
-            mode: if style == VisualStyle::Bloom { ScrollMode::Ripple } else { ScrollMode::Rigid },
+            mode: input.scroll_mode(),
             silence,
             viewport: lh as f64,
             manual,
+            speed: input.scroll.speed,
         });
         let base = self.scroller.base();
         info.base = if manual { input.follow.offset } else { auto_desired / ch as f64 };
@@ -952,6 +945,7 @@ mod tests {
             let prepared = prepare(&lyrics, PrepareOptions { interludes: true, interlude_threshold: 3.0, extend_lines: style == VisualStyle::Bloom, join_split_words: false });
             let theme = Theme::build(&appearance, Some(Palette { dominant: Rgb::new(0.12, 0.1, 0.25), accent: Rgb::new(0.85, 0.35, 0.55) }), None);
             let lyrics_cfg = LyricsConfig::default();
+            let scroll_cfg = crate::config::ScrollConfig::default();
             let follow = Follow::default();
             let screen = Rect::new(0, 0, 100, 34);
             let area = Rect::new(0, 5, 100, 27);
@@ -965,6 +959,7 @@ mod tests {
                     theme: &theme,
                     appearance: &appearance,
                     lyrics: &lyrics_cfg,
+                    scroll: &scroll_cfg,
                     follow: &follow,
                     screen_height: 34,
                     show_cursor: false,
