@@ -326,7 +326,8 @@ impl PixelRenderer {
                         y += p.height + gap_after;
                         parts.push(p);
                     };
-                    let lead = self.build_part(PartKind::Lead, &line.lead, false, size, width, x, align, &family, weight);
+                    let lead_size = if line.background_only { size * 0.72 } else { size };
+                    let lead = self.build_part(PartKind::Lead, &line.lead, false, lead_size, width, x, align, &family, weight);
                     push(lead, &mut parts, size * 0.08);
                     if key.romanization && (line.lead.syllables.iter().any(|s| s.roman.is_some()) || line.lead.roman.is_some()) {
                         let timed = line.lead.syllables.iter().any(|s| s.roman.is_some()) && prepared.lyrics.kind == SyncKind::Syllable;
@@ -610,7 +611,8 @@ impl PixelRenderer {
                 };
                 for pi in 0..part_count {
                     let pkind = self.layout.as_ref().unwrap().blocks[bi].parts[pi].kind;
-                    let background = matches!(pkind, PartKind::Bg(_));
+                    let background = matches!(pkind, PartKind::Bg(_))
+                        || (pkind == PartKind::Lead && prepared.lyrics.lines[li].background_only);
                     let mut alpha = match (kind, style, state) {
                         (SyncKind::Static, _, _) => 0.9,
                         (_, VisualStyle::Bloom, State::Sung) => {
@@ -677,7 +679,7 @@ impl PixelRenderer {
         let text = input.theme.text;
         let line = &prepared.lyrics.lines[li];
         let size = part.size;
-        let background = matches!(part.kind, PartKind::Bg(_));
+        let background = matches!(part.kind, PartKind::Bg(_)) || (part.kind == PartKind::Lead && line.background_only);
         let group: Option<&VocalGroup> = match part.kind {
             PartKind::Lead | PartKind::Roman { timed: true, .. } => Some(&line.lead),
             PartKind::Bg(i) => line.background.get(i),
@@ -961,7 +963,7 @@ mod tests {
             if i == 1 {
                 background.push(words("(oh|oh oh)", end - 0.6, 0.2));
             }
-            lines.push(LyricLine { start: t, end, opposite: i == 3, lead, background });
+            lines.push(LyricLine { start: t, end, opposite: i == 3, lead, background, background_only: false });
             t = end + 0.4;
         }
         Lyrics { kind: crate::lyrics::SyncKind::Syllable, lines, credits: Credits::default(), language: None, instrumental: false }
