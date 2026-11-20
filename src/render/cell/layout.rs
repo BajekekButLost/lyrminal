@@ -218,10 +218,12 @@ pub fn credit_rows(credits: &Credits, width: u16, align: Align) -> Vec<Row> {
             None,
         ));
     }
-    let mut provided = format!("Lyrics provided by {}", credits.provider);
+    let mut short = credits.provider.clone();
     if let Some(src) = &credits.source {
-        provided.push_str(&format!(" · {src}"));
+        short.push_str(&format!(" · {src}"));
     }
+    let long = format!("Lyrics provided by {short}");
+    let provided = if UnicodeWidthStr::width(long.as_str()) <= width as usize { long } else { short };
     rows.extend(text_rows(
         &provided,
         width,
@@ -466,5 +468,21 @@ mod tests {
         assert_eq!(l.blocks[0].rows[0].align, Align::Right);
         assert!(l.blocks.last().unwrap().rows.iter().any(|r| r.link.is_none()));
         assert_eq!(l.item_tops.len(), 1);
+    }
+
+    #[test]
+    fn provider_credit_stays_on_one_line() {
+        let credits = Credits {
+            provider: "Spicy Lyrics".into(),
+            source: Some("Community sync".into()),
+            ..Default::default()
+        };
+        let text = |rows: &[Row]| rows[0].glyphs.iter().map(|g| g.text.as_str()).collect::<String>();
+        let wide = credit_rows(&credits, 60, Align::Left);
+        assert_eq!(wide.len(), 1);
+        assert_eq!(text(&wide), "Lyrics provided by Spicy Lyrics · Community sync");
+        let narrow = credit_rows(&credits, 32, Align::Left);
+        assert_eq!(narrow.len(), 1);
+        assert_eq!(text(&narrow), "Spicy Lyrics · Community sync");
     }
 }
