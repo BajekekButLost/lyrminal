@@ -20,28 +20,54 @@ impl Mask {
         }
     }
 
-    pub fn stamp_shaded(&mut self, src: &[u8], sw: usize, sh: usize, sx: i32, sy: i32, mut shade: impl FnMut(i32) -> f32) {
-        let mut cols: Vec<f32> = Vec::with_capacity(sw);
-        for col in 0..sw {
-            cols.push(shade(sx + col as i32).clamp(0.0, 1.0));
+    #[allow(clippy::too_many_arguments)]
+    pub fn stamp_resampled(&mut self, src: &[u8], sw: usize, sh: usize, left: f32, top: f32, k: f32, mut shade: impl FnMut(i32) -> f32) {
+        if sw == 0 || sh == 0 || k <= 0.0 {
+            return;
         }
-        for row in 0..sh {
-            let ty = sy + row as i32 - self.y;
-            if ty < 0 || ty as usize >= self.h {
+        let x0 = (left.floor() as i32).max(self.x);
+        let x1 = ((left + sw as f32 * k).ceil() as i32).min(self.x + self.w as i32);
+        let y0 = (top.floor() as i32).max(self.y);
+        let y1 = ((top + sh as f32 * k).ceil() as i32).min(self.y + self.h as i32);
+        if x0 >= x1 || y0 >= y1 {
+            return;
+        }
+        let inv = 1.0 / k;
+        let at = |c: i32, r: i32| -> f32 {
+            if c < 0 || r < 0 || c as usize >= sw || r as usize >= sh {
+                0.0
+            } else {
+                src[r as usize * sw + c as usize] as f32
+            }
+        };
+        let cols: Vec<(i32, f32, f32)> = (x0..x1)
+            .map(|tx| {
+                let u = (tx as f32 + 0.5 - left) * inv - 0.5;
+                let uf = u.floor();
+                (uf as i32, u - uf, shade(tx).clamp(0.0, 1.0))
+            })
+            .collect();
+        for ty in y0..y1 {
+            let v = (ty as f32 + 0.5 - top) * inv - 0.5;
+            let vf = v.floor();
+            let (r, fy) = (vf as i32, v - vf);
+            if r < -1 || r >= sh as i32 {
                 continue;
             }
-            for (col, a) in cols.iter().enumerate() {
-                let tx = sx + col as i32 - self.x;
-                if tx < 0 || tx as usize >= self.w {
+            let row = (ty - self.y) as usize * self.w;
+            for (i, &(c, fx, a)) in cols.iter().enumerate() {
+                if a <= 0.0 || c < -1 || c >= sw as i32 {
                     continue;
                 }
-                let v = src[row * sw + col] as f32 / 255.0 * a;
-                if v <= 0.0 {
+                let top_row = at(c, r) + (at(c + 1, r) - at(c, r)) * fx;
+                let bottom_row = at(c, r + 1) + (at(c + 1, r + 1) - at(c, r + 1)) * fx;
+                let s = (top_row + (bottom_row - top_row) * fy) / 255.0 * a;
+                if s <= 0.0 {
                     continue;
                 }
-                let d = &mut self.data[ty as usize * self.w + tx as usize];
+                let d = &mut self.data[row + (x0 - self.x) as usize + i];
                 let cur = *d as f32 / 255.0;
-                *d = ((v + cur * (1.0 - v)) * 255.0).round().min(255.0) as u8;
+                *d = ((s + cur * (1.0 - s)) * 255.0).round().min(255.0) as u8;
             }
         }
     }
