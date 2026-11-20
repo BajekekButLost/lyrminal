@@ -578,8 +578,7 @@ impl App {
                 }
                 MouseEventKind::Up(MouseButton::Left) => {
                     if let Some(pos) = self.scrub.take() {
-                        let _ = self.player_tx.send(PlayerCommand::SetPosition(pos));
-                        self.follow.manual = false;
+                        self.seek_to(pos);
                     }
                 }
                 _ => {}
@@ -884,9 +883,19 @@ impl App {
             return;
         }
         let offset = (self.cfg.sync.offset_ms + self.track_offset_ms()) as f64 / 1000.0;
-        let target = (hit.time - offset - 0.05).max(0.0);
+        self.seek_to(hit.time - offset - 0.05);
+    }
+
+    fn seek_to(&mut self, position: f64) {
+        let len = self.track.as_ref().and_then(|t| t.length).filter(|l| *l > 0.0);
+        let target = match len {
+            Some(l) => position.clamp(0.0, l),
+            None => position.max(0.0),
+        };
         let _ = self.player_tx.send(PlayerCommand::SetPosition(target));
+        self.clock.jump(target, Instant::now());
         self.follow.manual = false;
+        self.dirty = true;
     }
 
     fn controls_allowed(&mut self) -> bool {
@@ -1012,7 +1021,11 @@ impl App {
             Action::Seek(dir) => {
                 if self.controls_allowed() {
                     let step = self.cfg.controls.seek_step_secs as f64 * dir as f64;
+                    let now = Instant::now();
+                    let target = self.clock.raw(now) + step;
                     let _ = self.player_tx.send(PlayerCommand::SeekBy(step));
+                    let len = self.track.as_ref().and_then(|t| t.length).unwrap_or(f64::MAX);
+                    self.clock.jump(target.clamp(0.0, len), now);
                 }
             }
             Action::Next => {
@@ -1039,9 +1052,7 @@ impl App {
                     None => return,
                 };
                 let offset = (self.cfg.sync.offset_ms + self.track_offset_ms()) as f64 / 1000.0;
-                let target = (start - offset).max(0.0);
-                let _ = self.player_tx.send(PlayerCommand::SetPosition(target));
-                self.follow.manual = false;
+                self.seek_to(start - offset);
             }
         }
     }
