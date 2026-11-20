@@ -290,12 +290,23 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
         }
     });
 
-    let main_agent = built.iter().filter_map(|l| l.agent.clone()).find(|a| {
-        agents
-            .iter()
-            .find(|(id, _)| id == a)
-            .map(|(_, t)| t != "group")
-            .unwrap_or(true)
+    let is_person = |a: &str| agents.iter().find(|(id, _)| id == a).map(|(_, t)| t != "group").unwrap_or(true);
+    let declared = agents
+        .iter()
+        .filter(|(_, t)| t != "group")
+        .map(|(id, _)| id.clone())
+        .find(|id| built.iter().any(|l| l.agent.as_deref() == Some(id.as_str())));
+    let main_agent = declared.or_else(|| {
+        let mut counts: Vec<(String, usize)> = Vec::new();
+        for l in built.iter().filter(|l| !l.lead.is_empty()) {
+            if let Some(a) = l.agent.as_deref().filter(|a| is_person(a)) {
+                match counts.iter_mut().find(|(id, _)| id == a) {
+                    Some((_, n)) => *n += 1,
+                    None => counts.push((a.to_string(), 1)),
+                }
+            }
+        }
+        counts.into_iter().max_by_key(|(_, n)| *n).map(|(id, _)| id)
     });
     let is_opposite = |agent: &Option<String>| -> bool {
         let (Some(a), Some(main)) = (agent, &main_agent) else { return false };
@@ -323,6 +334,7 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
                 roman: None,
                 translation: None,
             },
+            SyncKind::Syllable if l.background.iter().any(|g| !g.is_empty()) => VocalGroup::default(),
             SyncKind::Static => {
                 if plain.is_empty() {
                     continue;
@@ -364,6 +376,7 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
             opposite,
             lead,
             background,
+            background_only: false,
         });
     }
     if lines.is_empty() {
@@ -403,6 +416,20 @@ mod tests {
         assert!(l.lines[1].opposite);
         assert_eq!(l.credits.songwriters, vec!["Writer One".to_string()]);
         assert_eq!(l.language.as_deref(), Some("en"));
+    }
+
+    #[test]
+    fn promotes_background_only_duet_lines() {
+        let doc = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:lrc="x" lrc:timing="Word"><head><metadata><ttm:agent type="person" xml:id="v1"/><ttm:agent type="person" xml:id="v2"/></metadata></head><body><div><p begin="0.4" end="1.5" ttm:agent="v2"><span ttm:role="x-bg"><span begin="0.4" end="0.9">(ah</span> <span begin="0.9" end="1.5">ah)</span></span></p><p begin="2.0" end="3.0" ttm:agent="v1"><span begin="2.0" end="3.0">main</span></p></div></body></tt>"#;
+        let l = parse(doc, Credits::default()).unwrap();
+        assert_eq!(l.lines.len(), 2);
+        let first = &l.lines[0];
+        assert!(first.background_only);
+        assert!(first.opposite);
+        assert!(first.background.is_empty());
+        assert_eq!(first.lead.text(), "(ah ah)");
+        assert!((first.start - 0.4).abs() < 1e-9);
+        assert_eq!(first.lead.syllables.len(), 2);
     }
 
     #[test]
