@@ -8,13 +8,14 @@ use ratatui::layout::Rect;
 
 use self::raster::{Canvas, Mask};
 use super::effects::{self, EdgeWord, bloom, spring};
+use super::lineanim::LineAnims;
 use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput, push_px_hit};
 use crate::config::ClickSeek;
 use crate::anim::{Rgb, Spring, lerp};
 use crate::config::{Alignment, Background, VisualStyle};
 use crate::lyrics::process::{self, ItemKind, Prepared, State};
-use crate::lyrics::{SyncKind, VocalGroup};
+use crate::lyrics::{LyricLine, SyncKind, VocalGroup};
 
 pub struct Fonts {
     pub system: FontSystem,
@@ -50,6 +51,7 @@ struct PGlyph {
 #[derive(Debug, Clone)]
 struct Part {
     kind: PartKind,
+    background: bool,
     size: f32,
     top: f32,
     height: f32,
@@ -100,13 +102,34 @@ struct SylAnim {
 
 impl SylAnim {
     fn new() -> Self {
+        Self::at(effects::SPLINES.word_scale.at(0.0), effects::SPLINES.word_lift.at(0.0))
+    }
+
+    fn letter() -> Self {
+        Self::at(effects::SPLINES.letter_scale.at(0.0), effects::SPLINES.letter_lift.at(0.0))
+    }
+
+    fn at(scale: f64, lift: f64) -> Self {
         Self {
-            scale: Spring::new(0.95, 0.88, 0.64),
-            lift: Spring::new(0.01, 1.45, 0.4),
+            scale: Spring::new(scale, 0.88, 0.64),
+            lift: Spring::new(lift, 1.45, 0.4),
             glow: Spring::new(0.0, 1.18, 0.56),
         }
     }
+
+    fn drive(&mut self, scale: f64, lift: f64, glow: f64, dt: f64) -> bool {
+        self.scale.set_goal(scale);
+        self.lift.set_goal(lift);
+        self.glow.set_goal(glow);
+        self.scale.step(dt);
+        self.lift.step(dt);
+        self.glow.step(dt);
+        self.scale.is_settled() && self.lift.is_settled() && self.glow.is_settled()
+    }
 }
+
+type AnimKey = (usize, PartKind, usize);
+type LetterKey = (usize, PartKind, usize, usize);
 
 pub struct PixelFrame {
     pub info: FrameInfo,
@@ -119,9 +142,12 @@ pub struct PixelRenderer {
     pub canvas: Canvas,
     layout: Option<PLayout>,
     scroller: Scroller,
-    masks: HashMap<(usize, usize, u16), Mask>,
+    masks: HashMap<(usize, usize, u16, bool), Mask>,
     glows: HashMap<CacheKey, Mask>,
-    anims: HashMap<(usize, PartKind, usize), SylAnim>,
+    anims: HashMap<AnimKey, SylAnim>,
+    letters: HashMap<LetterKey, SylAnim>,
+    lines: LineAnims,
+    springs_settled: HashMap<usize, bool>,
     prepared_id: usize,
 }
 
@@ -146,6 +172,18 @@ fn group_text(group: &VocalGroup, roman: bool) -> (String, Vec<Range<usize>>) {
         }
     }
     (text, ranges)
+}
+
+fn part_group(kind: PartKind, line: &LyricLine) -> Option<&VocalGroup> {
+    match kind {
+        PartKind::Lead | PartKind::Roman { timed: true, .. } => Some(&line.lead),
+        PartKind::Bg(i) => line.background.get(i),
+        _ => None,
+    }
+}
+
+fn scale_about(p: (f32, f32), pivot: (f32, f32), s: f32) -> (f32, f32) {
+    (pivot.0 + (p.0 - pivot.0) * s, pivot.1 + (p.1 - pivot.1) * s)
 }
 
 fn bloom_lift(tau: f64) -> f64 {
@@ -217,6 +255,9 @@ impl PixelRenderer {
             masks: HashMap::new(),
             glows: HashMap::new(),
             anims: HashMap::new(),
+            letters: HashMap::new(),
+            lines: LineAnims::default(),
+            springs_settled: HashMap::new(),
             prepared_id: 0,
         }
     }
@@ -224,8 +265,22 @@ impl PixelRenderer {
     pub fn reset(&mut self) {
         self.layout = None;
         self.masks.clear();
-        self.anims.clear();
+        self.clear_springs();
+        self.lines.reset();
         self.scroller.reset();
+    }
+
+    fn clear_springs(&mut self) {
+        self.anims.clear();
+        self.letters.clear();
+        self.springs_settled.clear();
+    }
+
+    fn forget_block(&mut self, bi: usize) {
+        if self.springs_settled.remove(&bi).is_some() {
+            self.anims.retain(|k, _| k.0 != bi);
+            self.letters.retain(|k, _| k.0 != bi);
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -281,6 +336,7 @@ impl PixelRenderer {
         }
         Part {
             kind,
+            background: matches!(kind, PartKind::Bg(_)),
             size,
             top: 0.0,
             height,
@@ -327,7 +383,8 @@ impl PixelRenderer {
                         parts.push(p);
                     };
                     let lead_size = if line.background_only { size * 0.72 } else { size };
-                    let lead = self.build_part(PartKind::Lead, &line.lead, false, lead_size, width, x, align, &family, weight);
+                    let mut lead = self.build_part(PartKind::Lead, &line.lead, false, lead_size, width, x, align, &family, weight);
+                    lead.background = line.background_only;
                     push(lead, &mut parts, size * 0.08);
                     if key.romanization && (line.lead.syllables.iter().any(|s| s.roman.is_some()) || line.lead.roman.is_some()) {
                         let timed = line.lead.syllables.iter().any(|s| s.roman.is_some()) && prepared.lyrics.kind == SyncKind::Syllable;
@@ -377,39 +434,93 @@ impl PixelRenderer {
             content_w,
         });
         self.masks.clear();
-        self.anims.clear();
+        self.clear_springs();
+        self.lines.reset();
     }
 
-    fn part_mask(&mut self, bi: usize, pi: usize, blur: u16) -> Option<&Mask> {
-        if !self.masks.contains_key(&(bi, pi, blur)) {
-            let layout = self.layout.as_ref()?;
-            let part = layout.blocks.get(bi)?.parts.get(pi)?.clone();
-            let content_w = layout.content_w;
-            let pad = (part.size * 0.4) as i32;
-            let mut mask = Mask::new(-pad, (part.top) as i32 - pad, (content_w as i32 + pad * 2) as usize, (part.height as i32 + pad * 2) as usize);
-            for g in part.glyphs.iter().filter(|g| !g.blank) {
-                let phys = g.glyph.physical((part.x, 0.0), 1.0);
-                if let Some(img) = self.fonts.swash.get_image(&mut self.fonts.system, phys.cache_key).as_ref() {
-                    let x = phys.x + img.placement.left;
-                    let y = (part.top + g.baseline).round() as i32 + phys.y - img.placement.top;
-                    let (w, h) = (img.placement.width as usize, img.placement.height as usize);
-                    match img.content {
-                        SwashContent::Mask => mask.stamp(&img.data, w, h, x, y),
-                        SwashContent::SubpixelMask => {
-                            let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[1]).collect();
-                            mask.stamp(&a, w, h, x, y)
-                        }
-                        SwashContent::Color => {
-                            let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[3]).collect();
-                            mask.stamp(&a, w, h, x, y)
-                        }
-                    }
+    fn layer_for(&self, bi: usize) -> Option<Mask> {
+        let layout = self.layout.as_ref()?;
+        let block = layout.blocks.get(bi)?;
+        let size = block.parts.first().map(|p| p.size).unwrap_or(16.0);
+        let pad = (size * 0.6) as i32;
+        Some(Mask::new(
+            -pad,
+            -pad,
+            (layout.content_w as i32 + pad * 2) as usize,
+            (block.height as i32 + pad * 2) as usize,
+        ))
+    }
+
+    fn part_mask(&mut self, bi: usize, pi: usize, blur: u16, idle: bool, input: &FrameInput) -> Option<&Mask> {
+        let key = (bi, pi, blur, idle);
+        if !self.masks.contains_key(&key) {
+            let part = self.layout.as_ref()?.blocks.get(bi)?.parts.get(pi)?.clone();
+            let mut mask = self.layer_for(bi)?;
+            let line = self.layout.as_ref().and_then(|l| {
+                let item = input.prepared.items.get(l.blocks[bi].item)?;
+                match item.kind {
+                    ItemKind::Line(li) => input.prepared.lyrics.lines.get(li),
+                    _ => None,
                 }
+            });
+            let group = line.and_then(|line| part_group(part.kind, line));
+            let spring_idle = idle
+                && input.style() == VisualStyle::Spring
+                && input.prepared.lyrics.kind == SyncKind::Syllable
+                && group.is_some();
+            for g in part.glyphs.iter().filter(|g| !g.blank) {
+                let baseline = part.top + g.baseline;
+                let (origin, scale) = if spring_idle {
+                    let group = group.unwrap();
+                    let si = g.syl.min(group.syllables.len() - 1);
+                    let (sx0, sx1) = part.syl_boxes[si];
+                    let syl_pivot = (part.x + (sx0 + sx1) / 2.0, baseline);
+                    let mut origin = (part.x + g.glyph.x, baseline);
+                    let mut scale = effects::SPLINES.word_scale.at(0.0) as f32;
+                    let mut lift = effects::SPLINES.word_lift.at(0.0) as f32;
+                    if input.appearance.emphasis
+                        && !matches!(part.kind, PartKind::Roman { .. })
+                        && process::spring_emphasis(&group.syllables[si])
+                    {
+                        let ls = effects::SPLINES.letter_scale.at(0.0) as f32;
+                        let letter_pivot = (origin.0 + g.glyph.w / 2.0, baseline);
+                        origin = scale_about(origin, letter_pivot, ls);
+                        scale *= ls;
+                        lift += 2.0 * effects::SPLINES.letter_lift.at(0.0) as f32;
+                    }
+                    let o = scale_about(origin, syl_pivot, effects::SPLINES.word_scale.at(0.0) as f32);
+                    ((o.0, o.1 + lift * part.size), scale)
+                } else {
+                    ((part.x + g.glyph.x, baseline), 1.0)
+                };
+                self.stamp_glyph(&mut mask, &g.glyph, origin, scale, |_| 1.0);
             }
             let blurred = if blur > 0 { mask.blurred(blur as f32) } else { mask };
-            self.masks.insert((bi, pi, blur), blurred);
+            self.masks.insert(key, blurred);
         }
-        self.masks.get(&(bi, pi, blur))
+        self.masks.get(&key)
+    }
+
+    fn stamp_glyph(&mut self, layer: &mut Mask, glyph: &LayoutGlyph, origin: (f32, f32), scale: f32, shade: impl FnMut(i32) -> f32) -> Option<(CacheKey, i32, i32)> {
+        let scale = (scale * 100.0).round() / 100.0;
+        let phys = glyph.physical((origin.0 - glyph.x * scale, 0.0), scale);
+        let draw_y = origin.1.round() as i32 + phys.y;
+        let img = self.fonts.swash.get_image(&mut self.fonts.system, phys.cache_key).as_ref()?;
+        let (w, h) = (img.placement.width as usize, img.placement.height as usize);
+        let x = phys.x + img.placement.left;
+        let y = draw_y - img.placement.top;
+        match img.content {
+            SwashContent::Mask => layer.stamp_shaded(&img.data, w, h, x, y, shade),
+            SwashContent::SubpixelMask => {
+                let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[1]).collect();
+                layer.stamp_shaded(&a, w, h, x, y, shade)
+            }
+            SwashContent::Color => {
+                let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[3]).collect();
+                layer.stamp_shaded(&a, w, h, x, y, shade)
+            }
+        }
+        Some((phys.cache_key, phys.x, draw_y))
     }
 
     fn glow_mask(&mut self, key: CacheKey, radius: f32) -> Option<Mask> {
@@ -525,6 +636,7 @@ impl PixelRenderer {
         let glow_color = input.theme.accent.mix(Rgb::WHITE, 0.45);
         let mut animating = self.scroller.is_animating();
         let block_count = self.layout.as_ref().map(|l| l.blocks.len()).unwrap_or(0);
+        self.lines.begin_frame();
         for bi in 0..block_count {
             let (item_idx, btop, bheight) = {
                 let b = &self.layout.as_ref().unwrap().blocks[bi];
@@ -536,12 +648,7 @@ impl PixelRenderer {
             }
             let it = prepared.items[item_idx];
             let state = if kind == SyncKind::Static { State::Active } else { process::state(t, it.start, it.end) };
-            let recently = state == State::Sung && t - it.end < 1.0;
             let distance = item_idx.abs_diff(target);
-            let live = kind != SyncKind::Static && (state == State::Active || recently);
-            if live {
-                animating = true;
-            }
             if let ItemKind::Interlude { start, end } = it.kind {
                 if state == State::Active {
                     let dots = if style == VisualStyle::Bloom { effects::bloom_dots(t, start, end) } else { effects::spring_dots(t, start, end) };
@@ -603,51 +710,60 @@ impl PixelRenderer {
                     }
                 }
             }
-            if !live {
-                let depth_blur = if input.appearance.depth_dimming && !manual && kind != SyncKind::Static {
-                    (distance.min(5) as f32 * 0.03 * size).round() as u16
-                } else {
-                    0
+            let static_kind = kind == SyncKind::Static;
+            let blur_target = if input.appearance.depth_dimming && !manual && !static_kind && state != State::Active {
+                distance.min(5) as f64 * 0.03 * size as f64
+            } else {
+                0.0
+            };
+            let active_target = if !static_kind && state == State::Active { 1.0 } else { 0.0 };
+            let look = self.lines.step(item_idx, active_target, blur_target, input.dt);
+            let line = &prepared.lyrics.lines[li];
+            let bloom_settling = style == VisualStyle::Bloom && state == State::Sung && t - line.full_end() < 1.5;
+            let springs_busy = !self.springs_settled.get(&bi).copied().unwrap_or(true);
+            let live = !static_kind && (state == State::Active || !look.settled || springs_busy || bloom_settling);
+            let fade = if input.appearance.fade_previous && !manual && state == State::Sung && item_idx < target {
+                1.0 - ((t - it.end) / 0.4).clamp(0.0, 1.0) as f32
+            } else {
+                1.0
+            };
+            if live {
+                animating = true;
+                let block = LiveBlock {
+                    bi,
+                    li,
+                    state,
+                    t,
+                    active: look.active as f32,
+                    blur: look.depth as f32,
+                    fade,
+                    x0,
+                    y,
+                    clip,
+                    glow_color,
                 };
-                for pi in 0..part_count {
-                    let pkind = self.layout.as_ref().unwrap().blocks[bi].parts[pi].kind;
-                    let background = matches!(pkind, PartKind::Bg(_))
-                        || (pkind == PartKind::Lead && prepared.lyrics.lines[li].background_only);
-                    let mut alpha = match (kind, style, state) {
-                        (SyncKind::Static, _, _) => 0.9,
-                        (_, VisualStyle::Bloom, State::Sung) => {
-                            let since = t - prepared.lyrics.lines[li].full_end();
-                            lerp(if background { bloom::BG_LIT as f64 } else { bloom::LIT as f64 }, bloom::UNLIT as f64, effects::bloom_sung_dim(since)) as f32
-                        }
-                        (_, VisualStyle::Bloom, _) => bloom::UNLIT,
-                        (_, VisualStyle::Spring, State::Sung) => spring::SUNG,
-                        _ => spring::NOT_SUNG,
-                    };
-                    if background && style == VisualStyle::Spring {
-                        alpha *= 0.8;
-                    }
-                    if matches!(pkind, PartKind::Translation | PartKind::Roman { .. }) {
-                        alpha *= 0.8;
-                    }
-                    if input.appearance.fade_previous && !manual && state == State::Sung && item_idx < target {
-                        alpha *= 1.0 - ((t - it.end) / 0.4).clamp(0.0, 1.0) as f32;
-                    }
-                    let alpha = (alpha * contrast).clamp(0.0, 1.0);
-                    if alpha <= 0.01 {
-                        continue;
-                    }
-                    if let Some(mask) = self.part_mask(bi, pi, depth_blur) {
-                        let (mw, mh, mx, my) = (mask.w, mask.h, mask.x, mask.y);
-                        let data = std::mem::take(&mut self.masks.get_mut(&(bi, pi, depth_blur)).unwrap().data);
-                        self.canvas.draw_alpha(&data, mw, mh, x0 as i32 + mx, y as i32 + my, clip, |_| (text, alpha));
-                        self.masks.get_mut(&(bi, pi, depth_blur)).unwrap().data = data;
-                    }
-                }
+                let settled = self.draw_live_block(input, &block);
+                self.springs_settled.insert(bi, settled);
                 continue;
             }
+            self.forget_block(bi);
+            let rest = if state == State::Active { State::NotSung } else { state };
+            let blur = look.depth.round().max(0.0) as u16;
+            let idle = state == State::NotSung;
             for pi in 0..part_count {
                 let part = self.layout.as_ref().unwrap().blocks[bi].parts[pi].clone();
-                self.draw_live_part(input, &part, bi, li, state, t, x0, y, clip, glow_color);
+                let alpha = (rest_alpha(input, rest, &part, line, t) * fade * contrast).clamp(0.0, 1.0);
+                if alpha <= 0.01 {
+                    continue;
+                }
+                let key = (bi, pi, blur, idle);
+                if self.part_mask(bi, pi, blur, idle, input).is_some() {
+                    let mask = self.masks.get_mut(&key).unwrap();
+                    let (mw, mh, mx, my) = (mask.w, mask.h, mask.x, mask.y);
+                    let data = std::mem::take(&mut mask.data);
+                    self.canvas.draw_alpha(&data, mw, mh, x0 as i32 + mx, y as i32 + my, clip, |_| (text, alpha));
+                    self.masks.get_mut(&key).unwrap().data = data;
+                }
             }
         }
         info.animating = animating;
@@ -658,65 +774,97 @@ impl PixelRenderer {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_live_part(
+    fn draw_live_block(&mut self, input: &FrameInput, block: &LiveBlock) -> bool {
+        let parts = self.layout.as_ref().unwrap().blocks[block.bi].parts.clone();
+        let Some(mut layer) = self.layer_for(block.bi) else { return true };
+        let mut glows: Vec<(CacheKey, i32, i32, f32, f32)> = Vec::new();
+        let mut settled = true;
+        for part in &parts {
+            settled &= self.render_part(input, part, block, &mut layer, &mut glows);
+        }
+        let size = parts.first().map(|p| p.size).unwrap_or(16.0);
+        if input.appearance.glow && !glows.is_empty() {
+            let visible = (1.0 - block.blur / (0.15 * size)).clamp(0.0, 1.0);
+            for (key, gx, gy, g, gsize) in glows {
+                if let Some(m) = self.glow_mask(key, (gsize * 0.12).max(2.0)) {
+                    let a = (g * 0.45 * visible).min(1.0);
+                    self.canvas.draw_alpha(
+                        &m.data,
+                        m.w,
+                        m.h,
+                        block.x0 as i32 + gx + m.x,
+                        block.y as i32 + gy + m.y,
+                        block.clip,
+                        |_| (block.glow_color, a),
+                    );
+                }
+            }
+        }
+        let layer = if block.blur >= 0.5 { layer.blurred(block.blur) } else { layer };
+        let text = input.theme.text;
+        self.canvas.draw_alpha(
+            &layer.data,
+            layer.w,
+            layer.h,
+            block.x0 as i32 + layer.x,
+            block.y as i32 + layer.y,
+            block.clip,
+            |_| (text, 1.0),
+        );
+        settled
+    }
+
+    fn render_part(
         &mut self,
         input: &FrameInput,
         part: &Part,
-        bi: usize,
-        li: usize,
-        state: State,
-        t: f64,
-        x0: f32,
-        y: f32,
-        clip: (i32, i32, i32, i32),
-        glow_color: Rgb,
-    ) {
+        block: &LiveBlock,
+        layer: &mut Mask,
+        glows: &mut Vec<(CacheKey, i32, i32, f32, f32)>,
+    ) -> bool {
         let prepared = input.prepared;
         let kind = prepared.lyrics.kind;
         let style = input.style();
         let contrast = input.appearance.contrast;
-        let text = input.theme.text;
-        let line = &prepared.lyrics.lines[li];
+        let line = &prepared.lyrics.lines[block.li];
+        let (bi, state, t) = (block.bi, block.state, block.t);
         let size = part.size;
-        let background = matches!(part.kind, PartKind::Bg(_)) || (part.kind == PartKind::Lead && line.background_only);
-        let group: Option<&VocalGroup> = match part.kind {
-            PartKind::Lead | PartKind::Roman { timed: true, .. } => Some(&line.lead),
-            PartKind::Bg(i) => line.background.get(i),
-            _ => None,
-        };
-        let px = x0 + part.x;
-        let py = y + part.top;
-        let static_alpha = |a: f32| (a * contrast).clamp(0.0, 1.0);
+        let background = part.background;
+        let rest_state = if state == State::Active { State::NotSung } else { state };
+        let rest = rest_alpha(input, rest_state, part, line, t);
+        let roman_k = if matches!(part.kind, PartKind::Roman { timed: true, .. }) { 0.82 } else { 1.0 };
+        let (active, fade) = (block.active, block.fade);
+        let mix = move |act: f32| ((rest + (act * roman_k - rest) * active) * contrast * fade).clamp(0.0, 1.0);
+        let px = part.x;
+        let py = part.top;
 
-        let Some(group) = group.filter(|_| kind == SyncKind::Syllable) else {
-            let alpha = match (part.kind, kind, style) {
-                (PartKind::Translation | PartKind::Roman { .. }, _, _) => {
-                    if state == State::Active { 0.62 } else { 0.32 }
-                }
+        let Some(group) = part_group(part.kind, line).filter(|_| kind == SyncKind::Syllable) else {
+            let act = match (part.kind, kind, style) {
+                (PartKind::Translation | PartKind::Roman { .. }, _, _) => 0.62,
                 (_, SyncKind::Line, VisualStyle::Bloom) => {
-                    let tone = effects::bloom_line_tone(t, line.start, line.end);
-                    lerp(bloom::UNLIT as f64, bloom::LIT as f64, tone) as f32
+                    lerp(bloom::UNLIT as f64, bloom::LIT as f64, effects::bloom_line_tone(t, line.start, line.end)) as f32
                 }
                 (_, SyncKind::Line, VisualStyle::Spring) => {
-                    if state == State::Active {
-                        let p = process::progress(t, line.start, line.end);
-                        lerp(spring::LINE_UNLIT as f64, spring::ACTIVE_LIT as f64, effects::vertical_fill(p, 0.5)) as f32
-                    } else {
-                        spring::SUNG
-                    }
+                    let p = process::progress(t, line.start, line.end);
+                    lerp(spring::LINE_UNLIT as f64, spring::ACTIVE_LIT as f64, effects::vertical_fill(p, 0.5)) as f32
                 }
                 _ => 0.6,
             };
-            let glow = if kind == SyncKind::Line && style == VisualStyle::Spring && state == State::Active && input.appearance.glow {
-                effects::SPLINES.line_glow.at(process::progress(t, line.start, line.end)) as f32 * 0.4
+            let glow = if kind == SyncKind::Line && style == VisualStyle::Spring {
+                effects::SPLINES.line_glow.at(process::progress(t, line.start, line.end)) as f32 * 0.4 * active
             } else {
                 0.0
             };
+            let alpha = mix(act);
             for g in part.glyphs.iter().filter(|g| !g.blank) {
-                self.draw_glyph(&g.glyph, px, py + g.baseline, 1.0, (0.0, 0.0), clip, glow, glow_color, size, |_| (text, static_alpha(alpha)));
+                let placed = self.stamp_glyph(layer, &g.glyph, (px + g.glyph.x, py + g.baseline), 1.0, |_| alpha);
+                if glow > 0.02
+                    && let Some((key, gx, gy)) = placed
+                {
+                    glows.push((key, gx, gy, glow, size));
+                }
             }
-            return;
+            return true;
         };
 
         let (unlit, lit) = match style {
@@ -725,32 +873,68 @@ impl PixelRenderer {
             VisualStyle::Bloom if background => (bloom::UNLIT, bloom::BG_LIT),
             VisualStyle::Bloom => (bloom::UNLIT, bloom::LIT),
         };
-        let sung_dim = if state == State::Sung {
-            effects::bloom_sung_dim(t - line.full_end()) as f32
-        } else {
-            0.0
-        };
-        let spring_settle = if state == State::Sung {
-            (((t - line.full_end()) / 0.25).clamp(0.0, 1.0)) as f32
-        } else {
-            0.0
-        };
-        let spring_rest = if background { spring::SUNG * 0.8 } else { spring::SUNG };
         let words = process::words(group);
         let line_done = if state == State::Sung { Some(line.full_end()) } else { None };
+        let emphasis_on = input.appearance.emphasis && !matches!(part.kind, PartKind::Roman { .. });
+        let mut settled = true;
 
         if style == VisualStyle::Spring {
             let dt = input.dt;
+            let rest_scale = effects::SPLINES.letter_scale.at(0.0);
+            let rest_lift = effects::SPLINES.letter_lift.at(0.0);
             for si in 0..group.syllables.len() {
                 let s = &group.syllables[si];
                 let p = process::progress(t, s.start, s.end);
                 let anim = self.anims.entry((bi, part.kind, si)).or_insert_with(SylAnim::new);
-                anim.scale.set_goal(effects::SPLINES.word_scale.at(p));
-                anim.lift.set_goal(effects::SPLINES.word_lift.at(p));
-                anim.glow.set_goal(effects::glow(p));
-                anim.scale.step(dt);
-                anim.lift.step(dt);
-                anim.glow.step(dt);
+                settled &= anim.drive(
+                    effects::SPLINES.word_scale.at(p),
+                    effects::SPLINES.word_lift.at(p),
+                    effects::glow(p),
+                    dt,
+                );
+                if !(emphasis_on && process::spring_emphasis(s)) {
+                    continue;
+                }
+                let n = part.syl_letters.get(si).copied().unwrap_or(1).max(1);
+                let window = |k: usize| effects::spring_letter_window(s.start, s.end, n, k);
+                let active_letter = (0..n).find_map(|k| {
+                    let (ws, we) = window(k);
+                    (process::state(t, ws, we) == State::Active).then(|| (k, process::progress(t, ws, we)))
+                });
+                let syl_state = process::state(t, s.start, s.end);
+                for k in 0..n {
+                    let (ws, we) = window(k);
+                    let letter_state = process::state(t, ws, we);
+                    let (ts, tl, tg) = match syl_state {
+                        State::NotSung => (rest_scale, rest_lift, 0.0),
+                        State::Sung => (
+                            effects::SPLINES.letter_scale.at(1.0),
+                            effects::SPLINES.letter_lift.at(1.0),
+                            effects::glow(1.0),
+                        ),
+                        State::Active => {
+                            let mut v = (rest_scale, rest_lift, 0.0);
+                            if let Some((a, pct)) = active_letter {
+                                let d = k.abs_diff(a) as f64;
+                                let falloff = 1.0 / (1.0 + d.powf(2.8));
+                                let glow_falloff = 1.0 / (1.0 + 0.9 * d);
+                                v = (
+                                    rest_scale + (effects::SPLINES.letter_scale.at(pct) - rest_scale) * falloff,
+                                    rest_lift + (effects::SPLINES.letter_lift.at(pct) - rest_lift) * falloff,
+                                    effects::glow(pct) * glow_falloff,
+                                );
+                            }
+                            if letter_state == State::NotSung {
+                                v = (rest_scale, rest_lift, 0.0);
+                            } else if letter_state == State::Sung && active_letter.is_none() {
+                                v.2 = effects::glow(0.2);
+                            }
+                            v
+                        }
+                    };
+                    let letter = self.letters.entry((bi, part.kind, si, k)).or_insert_with(SylAnim::letter);
+                    settled &= letter.drive(ts, tl, tg, dt);
+                }
             }
         }
 
@@ -786,38 +970,52 @@ impl PixelRenderer {
             let baseline = py + g.baseline;
             let gx0 = px + g.glyph.x;
             let gw = g.glyph.w.max(1.0);
+            let origin0 = (gx0, baseline);
+            let (ul, l) = (unlit, lit);
             match style {
                 VisualStyle::Spring => {
-                    let n = part.syl_letters.get(si).copied().unwrap_or(1).max(1);
-                    let emphasized = input.appearance.emphasis && !matches!(part.kind, PartKind::Roman { .. }) && process::spring_emphasis(s);
-                    let (scale, lift, glow, fill_p, fill_x0, fill_w) = if emphasized {
-                        let (ws, we) = effects::spring_letter_window(s.start, s.end, n, g.letter_in_syl);
-                        let pl = process::progress(t, ws, we);
-                        let fill = effects::spring_letter_fill(t, ws, we);
-                        let sc = effects::SPLINES.letter_scale.at(pl);
-                        let lf = effects::SPLINES.letter_lift.at(pl) * 2.0;
-                        let gl = if state == State::Active { effects::glow(pl) } else { 0.0 };
-                        (sc, lf, gl, fill, gx0, gw)
+                    let syl = self.anims.get(&(bi, part.kind, si)).copied().unwrap_or_else(SylAnim::new);
+                    let syl_pivot = (px + sx0 + sw / 2.0, baseline);
+                    let emphasized = emphasis_on && process::spring_emphasis(s);
+                    let (origin, scale, lift, glow, fill_p, fill_x0, fill_w) = if emphasized {
+                        let n = part.syl_letters.get(si).copied().unwrap_or(1).max(1);
+                        let k = g.letter_in_syl;
+                        let letter = self.letters.get(&(bi, part.kind, si, k)).copied().unwrap_or_else(SylAnim::letter);
+                        let (ws, we) = effects::spring_letter_window(s.start, s.end, n, k);
+                        let letter_pivot = (gx0 + gw / 2.0, baseline);
+                        let o = scale_about(origin0, letter_pivot, letter.scale.position as f32);
+                        let o = scale_about(o, syl_pivot, syl.scale.position as f32);
+                        (
+                            o,
+                            (letter.scale.position * syl.scale.position) as f32,
+                            syl.lift.position + 2.0 * letter.lift.position,
+                            letter.glow.position as f32,
+                            effects::spring_letter_fill(t, ws, we),
+                            gx0,
+                            gw,
+                        )
                     } else {
-                        let a = self.anims.get(&(bi, part.kind, si)).copied().unwrap_or_else(SylAnim::new);
-                        let p = process::progress(t, s.start, s.end);
-                        (a.scale.position, a.lift.position, a.glow.position * 0.6, p, px + sx0, sw)
+                        (
+                            scale_about(origin0, syl_pivot, syl.scale.position as f32),
+                            syl.scale.position as f32,
+                            syl.lift.position,
+                            syl.glow.position as f32 * 0.5,
+                            process::progress(t, s.start, s.end),
+                            px + sx0,
+                            sw,
+                        )
                     };
-                    let scale = scale as f32;
-                    let lift_px = lift as f32 * size;
-                    let pivot = if emphasized {
-                        (gx0 + gw / 2.0, baseline)
-                    } else {
-                        (px + sx0 + sw / 2.0, baseline)
-                    };
-                    let glow = if input.appearance.glow { glow as f32 } else { 0.0 };
-                    let (ul, l) = (unlit, lit);
-                    self.draw_glyph(&g.glyph, px, baseline + lift_px, scale, pivot, clip, glow * 0.8, glow_color, size, move |x| {
+                    let origin = (origin.0, origin.1 + lift as f32 * size);
+                    let placed = self.stamp_glyph(layer, &g.glyph, origin, scale, move |x| {
                         let xf = ((x as f32 - fill_x0) / fill_w) as f64;
-                        let a = lerp(ul as f64, l as f64, effects::spring_fill(fill_p, xf)) as f32;
-                        let a = a + (spring_rest - a) * spring_settle;
-                        (text, (a * contrast).clamp(0.0, 1.0))
+                        mix(lerp(ul as f64, l as f64, effects::spring_fill(fill_p, xf)) as f32)
                     });
+                    let glow = glow * active;
+                    if glow > 0.02
+                        && let Some((key, gx, gy)) = placed
+                    {
+                        glows.push((key, gx, gy, glow, size * scale));
+                    }
                 }
                 VisualStyle::Bloom => {
                     let w = &words[g.word.min(words.len() - 1)];
@@ -827,32 +1025,36 @@ impl PixelRenderer {
                     }
                     let mut scale = 1.0f32;
                     let mut glow = 0.0f32;
-                    if input.appearance.emphasis && process::bloom_emphasis(group, w, background) && t >= w.start {
+                    if emphasis_on && process::bloom_emphasis(group, w, background) && t >= w.start {
                         let n = part.word_letters.get(g.word).copied().unwrap_or(1);
                         let amount = effects::bloom_flame(t - w.start, w.end - w.start, n, g.letter);
                         scale = 1.0 + (effects::bloom_flame_peak(w.end - w.start) * amount) as f32;
-                        glow = if input.appearance.glow { (amount * 0.5) as f32 } else { 0.0 };
+                        glow = (amount * 0.5) as f32 * active;
                     }
                     let edge = edges.get(&(g.baseline as i32)).copied();
-                    let fade = 0.882 * size as f64;
+                    let fade_w = 0.882 * size as f64;
                     let done = state == State::Sung;
-                    let px_c = px;
                     let s_end = s.end;
-                    let (ul, l) = (unlit, lit);
-                    self.draw_glyph(&g.glyph, px, baseline - lift as f32 * size, scale, (gx0 + gw / 2.0, baseline), clip, glow, glow_color, size, move |x| {
+                    let origin = scale_about(origin0, (gx0 + gw / 2.0, baseline), scale);
+                    let origin = (origin.0, origin.1 - lift as f32 * size);
+                    let placed = self.stamp_glyph(layer, &g.glyph, origin, scale, move |x| {
                         let lit_amt = match edge {
-                            Some(e) => effects::bloom_edge_lit(e, (x as f32 - px_c) as f64, fade),
+                            Some(e) => effects::bloom_edge_lit(e, (x as f32 - px) as f64, fade_w),
                             None => {
                                 if done || t >= s_end { 1.0 } else { 0.0 }
                             }
                         };
-                        let a = lerp(ul as f64, l as f64, lit_amt) as f32;
-                        let a = if done { lerp(l as f64, ul as f64, sung_dim as f64) as f32 } else { a };
-                        (text, (a * contrast).clamp(0.0, 1.0))
+                        mix(lerp(ul as f64, l as f64, lit_amt) as f32)
                     });
+                    if glow > 0.02
+                        && let Some((key, gx, gy)) = placed
+                    {
+                        glows.push((key, gx, gy, glow, size * scale));
+                    }
                 }
             }
         }
+        settled
     }
 
     #[cfg(test)]
@@ -861,53 +1063,47 @@ impl PixelRenderer {
         img.save(path).unwrap();
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn draw_glyph(
-        &mut self,
-        glyph: &LayoutGlyph,
-        part_x: f32,
-        baseline: f32,
-        scale: f32,
-        pivot: (f32, f32),
-        clip: (i32, i32, i32, i32),
-        glow: f32,
-        glow_color: Rgb,
-        size: f32,
-        shade: impl FnMut(i32) -> (Rgb, f32),
-    ) {
-        let scale = (scale * 100.0).round() / 100.0;
-        let origin_x = part_x + glyph.x;
-        let (sx, sy) = if (scale - 1.0).abs() > 1e-3 {
-            (pivot.0 + (origin_x - pivot.0) * scale, pivot.1 + (baseline - pivot.1) * scale)
-        } else {
-            (origin_x, baseline)
-        };
-        let phys = glyph.physical((sx - glyph.x * scale, 0.0), scale);
-        let draw_y = sy.round() as i32 + phys.y;
-        if glow > 0.02 {
-            let radius = (size * 0.12 * scale).max(2.0);
-            if let Some(m) = self.glow_mask(phys.cache_key, radius) {
-                let a = (glow * 0.45).min(1.0);
-                self.canvas.draw_alpha(&m.data, m.w, m.h, phys.x + m.x, draw_y + m.y, clip, |_| (glow_color, a));
-            }
-        }
-        let Some(img) = self.fonts.swash.get_image(&mut self.fonts.system, phys.cache_key).as_ref() else { return };
-        let (w, h) = (img.placement.width as usize, img.placement.height as usize);
-        let x = phys.x + img.placement.left;
-        let y = draw_y - img.placement.top;
-        match img.content {
-            SwashContent::Mask => self.canvas.draw_alpha(&img.data, w, h, x, y, clip, shade),
-            SwashContent::SubpixelMask => {
-                let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[1]).collect();
-                self.canvas.draw_alpha(&a, w, h, x, y, clip, shade)
-            }
-            SwashContent::Color => {
-                let mut shade = shade;
-                let alpha = shade(x + w as i32 / 2).1;
-                self.canvas.draw_rgba(&img.data, w, h, x, y, alpha, clip)
-            }
-        }
+}
+
+struct LiveBlock {
+    bi: usize,
+    li: usize,
+    state: State,
+    t: f64,
+    active: f32,
+    blur: f32,
+    fade: f32,
+    x0: f32,
+    y: f32,
+    clip: (i32, i32, i32, i32),
+    glow_color: Rgb,
+}
+
+fn rest_alpha(input: &FrameInput, rest: State, part: &Part, line: &LyricLine, t: f64) -> f32 {
+    let kind = input.prepared.lyrics.kind;
+    let style = input.style();
+    if kind == SyncKind::Static {
+        return if matches!(part.kind, PartKind::Translation | PartKind::Roman { .. }) { 0.6 } else { 0.9 };
     }
+    if matches!(part.kind, PartKind::Translation | PartKind::Roman { timed: false, .. }) {
+        return if rest == State::Sung { 0.32 } else { 0.26 };
+    }
+    let mut a = match (style, rest) {
+        (VisualStyle::Bloom, State::Sung) => {
+            let lit = if part.background { bloom::BG_LIT } else { bloom::LIT };
+            lerp(lit as f64, bloom::UNLIT as f64, effects::bloom_sung_dim(t - line.full_end())) as f32
+        }
+        (VisualStyle::Bloom, _) => bloom::UNLIT,
+        (VisualStyle::Spring, State::Sung) => spring::SUNG,
+        _ => spring::NOT_SUNG,
+    };
+    if part.background && style == VisualStyle::Spring {
+        a *= 0.8;
+    }
+    if matches!(part.kind, PartKind::Roman { timed: true, .. }) {
+        a *= 0.82;
+    }
+    a
 }
 
 #[cfg(test)]
@@ -1003,6 +1199,62 @@ mod tests {
             }
             println!("{name}: {:.1} ms/frame", started.elapsed().as_secs_f64() * 1000.0 / 30.0);
             renderer.save_png(&format!("/tmp/lyrminal-{name}.png"));
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn render_transition_strips() {
+        let lyrics = sample();
+        let strips: [(&str, VisualStyle, &[f64], (u32, u32, u32, u32)); 3] = [
+            ("held", VisualStyle::Spring, &[6.25, 6.45, 6.65, 6.85, 7.05, 7.25, 7.45, 7.75, 8.3], (440, 320, 360, 90)),
+            ("handover", VisualStyle::Spring, &[3.6, 3.85, 3.95, 4.05, 4.2, 4.35, 4.6, 5.2], (60, 230, 760, 250)),
+            ("bloom-handover", VisualStyle::Bloom, &[3.6, 3.85, 4.0, 4.2, 4.4, 4.7, 5.2], (60, 230, 760, 250)),
+        ];
+        for (name, style, times, (cx, cy, cw, chh)) in strips {
+            let mut renderer = PixelRenderer::new(load_fonts());
+            let mut appearance = AppearanceConfig::default();
+            appearance.style = style;
+            let prepared = prepare(&lyrics, PrepareOptions { interludes: true, interlude_threshold: 3.0, extend_lines: style == VisualStyle::Bloom, join_split_words: false });
+            let theme = Theme::build(&appearance, Some(Palette { dominant: Rgb::new(0.12, 0.1, 0.25), accent: Rgb::new(0.85, 0.35, 0.55) }), None);
+            let lyrics_cfg = LyricsConfig::default();
+            let scroll_cfg = crate::config::ScrollConfig::default();
+            let follow = Follow::default();
+            let screen = Rect::new(0, 0, 100, 34);
+            let area = Rect::new(0, 5, 100, 27);
+            let mut out = image::RgbaImage::new(cw, chh * times.len() as u32);
+            let start = times[0] - 1.0;
+            let mut frame = 0u64;
+            for (i, target) in times.iter().enumerate() {
+                loop {
+                    let t = start + frame as f64 / 60.0;
+                    let input = FrameInput {
+                        prepared: &prepared,
+                        t,
+                        wall: frame as f64 / 60.0,
+                        dt: 1.0 / 60.0,
+                        theme: &theme,
+                        appearance: &appearance,
+                        lyrics: &lyrics_cfg,
+                        scroll: &scroll_cfg,
+                        follow: &follow,
+                        screen_height: 34,
+                        show_cursor: false,
+                    };
+                    renderer.render(&input, 7, screen, area, (10.0, 22.0));
+                    frame += 1;
+                    if t >= *target {
+                        break;
+                    }
+                }
+                let full = image::RgbaImage::from_raw(renderer.canvas.w as u32, renderer.canvas.h as u32, renderer.canvas.straight_rgba()).unwrap();
+                let crop = image::imageops::crop_imm(&full, cx, cy, cw, chh).to_image();
+                image::imageops::replace(&mut out, &crop, 0, (i as u32 * chh) as i64);
+                for x in 0..cw {
+                    out.put_pixel(x, i as u32 * chh, image::Rgba([255, 255, 255, 60]));
+                }
+            }
+            out.save(format!("/tmp/lyrminal-strip-{name}.png")).unwrap();
         }
     }
 }
