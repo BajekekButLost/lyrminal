@@ -34,15 +34,15 @@ pub mod spring {
     pub const ACTIVE_UNLIT: f32 = 0.5;
     pub const ACTIVE_LIT: f32 = 0.88;
     pub const LINE_UNLIT: f32 = 0.38;
-    pub const BG_UNLIT: f32 = 0.3;
-    pub const BG_LIT: f32 = 0.6;
+    pub const BG_UNLIT: f32 = 0.26;
+    pub const BG_LIT: f32 = 0.8;
     pub const LETTER_TAIL: f64 = 0.25;
 }
 
 pub mod bloom {
     pub const UNLIT: f32 = 0.2;
     pub const LIT: f32 = 0.94;
-    pub const BG_LIT: f32 = 0.38;
+    pub const BG_LIT: f32 = 0.78;
     pub const SUNG_DELAY: f64 = 0.25;
     pub const SUNG_FADE: f64 = 0.35;
     pub const ROW_RUSH: f64 = 0.5;
