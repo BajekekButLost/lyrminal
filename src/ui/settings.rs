@@ -882,7 +882,7 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
     };
     match key.code {
         KeyCode::Esc if state.page.is_some() => leave_page(state, cfg),
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => return SettingsOutcome::Close,
+        KeyCode::Esc | KeyCode::Char('q') => return SettingsOutcome::Close,
         KeyCode::Tab => {
             state.page = None;
             state.section = (state.section + 1) % secs.len();

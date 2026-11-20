@@ -196,7 +196,7 @@ impl App {
             scrub: None,
         };
         if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
-            app.notify("Spicy Lyrics needs an API key: press o → Providers");
+            app.notify("Spicy Lyrics needs an API key: press Esc → Providers");
         }
         if app.cfg.appearance.renderer == Renderer::Pixel && !app.pixel_supported() {
             app.notify("Pixel renderer needs kitty graphics; using the cell renderer");
@@ -901,7 +901,7 @@ impl App {
 
     fn controls_allowed(&mut self) -> bool {
         if !self.cfg.controls.enabled {
-            self.notify("Playback controls are off: o → Controls");
+            self.notify("Playback controls are off: Esc → Controls");
             return false;
         }
         match &self.snapshot {
