@@ -83,10 +83,6 @@ pub fn delete_placements(out: &mut impl Write, id: u32) -> io::Result<()> {
     write!(out, "\x1b_Ga=d,d=i,i={id},q=2\x1b\\")
 }
 
-pub fn delete_all(out: &mut impl Write) -> io::Result<()> {
-    write!(out, "\x1b_Ga=d,d=A,q=2\x1b\\")
-}
-
 pub fn cleanup_temp_files() {
     let prefix = format!("lyrminal-tty-graphics-protocol-{}-", std::process::id());
     if let Ok(entries) = std::fs::read_dir(shm_dir()) {

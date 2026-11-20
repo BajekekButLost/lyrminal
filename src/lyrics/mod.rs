@@ -53,6 +53,7 @@ pub struct VocalGroup {
 }
 
 impl VocalGroup {
+    #[cfg(test)]
     pub fn text(&self) -> String {
         join_syllables(self.syllables.iter().map(|s| (s.text.as_str(), s.part_of_word)))
     }

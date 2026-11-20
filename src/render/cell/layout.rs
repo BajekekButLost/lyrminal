@@ -63,9 +63,7 @@ pub struct Block {
 pub struct Layout {
     pub blocks: Vec<Block>,
     pub total: usize,
-    pub width: u16,
     pub item_tops: Vec<f64>,
-    pub item_blocks: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -252,7 +250,6 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
     let mut blocks: Vec<Block> = Vec::new();
     let mut top = 0usize;
     let mut item_tops = Vec::with_capacity(prepared.items.len());
-    let mut item_blocks = Vec::with_capacity(prepared.items.len());
     let gap = opts.gap as usize;
 
     for (idx, item) in prepared.items.iter().enumerate() {
@@ -347,7 +344,6 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
             });
         }
         item_tops.push(top as f64);
-        item_blocks.push(blocks.len());
         let height = rows.len();
         blocks.push(Block {
             item: Some(idx),
@@ -378,9 +374,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
     Layout {
         blocks,
         total: top,
-        width,
         item_tops,
-        item_blocks,
     }
 }
 

@@ -835,11 +835,18 @@ impl App {
             self.notify("Playback controls are off: o → Controls");
             return false;
         }
-        if self.snapshot.is_none() {
-            self.notify("No player to control");
-            return false;
+        match &self.snapshot {
+            None => {
+                self.notify("No player to control");
+                false
+            }
+            Some(s) if !s.caps.can_control => {
+                let name = s.player.display_name();
+                self.notify(format!("{name} does not accept remote control"));
+                false
+            }
+            Some(_) => true,
         }
-        true
     }
 
     fn on_action(&mut self, action: Action) {

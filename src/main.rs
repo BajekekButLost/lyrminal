@@ -39,22 +39,17 @@ fn usage() {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    for arg in std::env::args().skip(1) {
+    if let Some(arg) = std::env::args().nth(1) {
         match arg.as_str() {
-            "-h" | "--help" => {
-                usage();
-                return Ok(());
-            }
-            "-V" | "--version" => {
-                println!("lyrminal {}", env!("CARGO_PKG_VERSION"));
-                return Ok(());
-            }
+            "-h" | "--help" => usage(),
+            "-V" | "--version" => println!("lyrminal {}", env!("CARGO_PKG_VERSION")),
             other => {
                 eprintln!("unknown argument: {other}");
                 usage();
                 std::process::exit(2);
             }
         }
+        return Ok(());
     }
 
     let cfg = match Config::load() {

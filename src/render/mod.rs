@@ -12,7 +12,6 @@ use crate::theme::Theme;
 pub struct Follow {
     pub manual: bool,
     pub offset: f64,
-    pub cursor_item: Option<usize>,
 }
 
 pub struct FrameInput<'a> {

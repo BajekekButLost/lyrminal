@@ -1,5 +1,3 @@
-use futures::future::join_all;
-
 use super::cache::Cache;
 use super::{Candidate, ProviderError, ProviderResult, Registry, TrackQuery};
 use crate::lyrics::{Lyrics, SyncKind};
@@ -116,19 +114,4 @@ pub async fn resolve(
     }
     out.result = fallback;
     out
-}
-
-pub async fn search_all(registry: &Registry, q: &TrackQuery) -> Vec<(String, ProviderResult<Vec<Candidate>>)> {
-    let futures = registry.providers.iter().map(|p| {
-        let p = p.clone();
-        let q = q.clone();
-        async move {
-            let r = match p.ready() {
-                Ok(()) => p.search(&q).await,
-                Err(reason) => Err(ProviderError::NotConfigured(reason)),
-            };
-            (p.id().to_string(), r)
-        }
-    });
-    join_all(futures).await
 }
