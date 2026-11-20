@@ -1,5 +1,6 @@
 pub mod cell;
 pub mod effects;
+pub mod lineanim;
 pub mod pixel;
 pub mod scroll;
 
