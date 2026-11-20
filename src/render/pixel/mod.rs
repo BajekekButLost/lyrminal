@@ -19,6 +19,8 @@ use crate::lyrics::{LyricLine, SyncKind, VocalGroup};
 
 const RASTER_STEP: f32 = 0.05;
 const BLUR_KEY_SCALE: f32 = 100.0;
+const SUBPIXEL_STEPS: f32 = 4.0;
+const MASK_TTL_FRAMES: u64 = 120;
 
 pub struct Fonts {
     pub system: FontSystem,
@@ -181,6 +183,22 @@ impl SylAnim {
 type AnimKey = (usize, PartKind, usize);
 type LetterKey = (usize, PartKind, usize, usize);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct MaskKey {
+    block: usize,
+    part: usize,
+    blur: u16,
+    idle: bool,
+    sub_x: u8,
+    sub_y: u8,
+}
+
+fn split_subpixel(v: f32) -> (i32, u8) {
+    let steps = (v * SUBPIXEL_STEPS).round();
+    let whole = (steps / SUBPIXEL_STEPS).floor();
+    (whole as i32, (steps - whole * SUBPIXEL_STEPS) as u8)
+}
+
 pub struct PixelFrame {
     pub info: FrameInfo,
     pub credits_y: Option<f32>,
@@ -192,13 +210,14 @@ pub struct PixelRenderer {
     pub canvas: Canvas,
     layout: Option<PLayout>,
     scroller: Scroller,
-    masks: HashMap<(usize, usize, u16, bool), Mask>,
+    masks: HashMap<MaskKey, (Mask, u64)>,
     glows: HashMap<CacheKey, Mask>,
     anims: HashMap<AnimKey, SylAnim>,
     letters: HashMap<LetterKey, SylAnim>,
     lines: LineAnims,
     springs_settled: HashMap<usize, bool>,
     prepared_id: usize,
+    frame: u64,
 }
 
 fn group_text(group: &VocalGroup, roman: bool) -> (String, Vec<Range<usize>>) {
@@ -309,6 +328,7 @@ impl PixelRenderer {
             lines: LineAnims::default(),
             springs_settled: HashMap::new(),
             prepared_id: 0,
+            frame: 0,
         }
     }
 
@@ -515,8 +535,9 @@ impl PixelRenderer {
         ))
     }
 
-    fn part_mask(&mut self, bi: usize, pi: usize, blur: u16, idle: bool, input: &FrameInput) -> Option<&Mask> {
-        let key = (bi, pi, blur, idle);
+    fn part_mask(&mut self, key: MaskKey, input: &FrameInput) -> Option<&mut Mask> {
+        let MaskKey { block: bi, part: pi, blur, idle, sub_x, sub_y } = key;
+        let (fx, fy) = (sub_x as f32 / SUBPIXEL_STEPS, sub_y as f32 / SUBPIXEL_STEPS);
         if !self.masks.contains_key(&key) {
             let part = self.layout.as_ref()?.blocks.get(bi)?.parts.get(pi)?.clone();
             let mut mask = self.layer_for(bi)?;
@@ -557,12 +578,16 @@ impl PixelRenderer {
                 } else {
                     ((part.x + g.glyph.x, baseline), 1.0)
                 };
-                self.stamp_glyph(&mut mask, &g.glyph, origin, scale, |_| 1.0);
+                self.stamp_glyph(&mut mask, &g.glyph, (origin.0 + fx, origin.1 + fy), scale, |_| 1.0);
             }
             let blurred = if blur > 0 { mask.blurred(blur as f32 / BLUR_KEY_SCALE) } else { mask };
-            self.masks.insert(key, blurred);
+            self.masks.insert(key, (blurred, self.frame));
         }
-        self.masks.get(&key)
+        let frame = self.frame;
+        self.masks.get_mut(&key).map(|(m, used)| {
+            *used = frame;
+            m
+        })
     }
 
     fn stamp_glyph(&mut self, layer: &mut Mask, glyph: &LayoutGlyph, origin: (f32, f32), scale: f32, shade: impl FnMut(i32) -> f32) -> Option<(CacheKey, i32, i32)> {
@@ -629,6 +654,7 @@ impl PixelRenderer {
             self.canvas.clear();
         }
         let mut info = FrameInfo::default();
+        self.frame += 1;
         if prepared_id != self.prepared_id {
             self.prepared_id = prepared_id;
             self.reset();
@@ -808,8 +834,10 @@ impl PixelRenderer {
                     active: look.active as f32,
                     blur: look.depth as f32,
                     fade,
-                    x0,
-                    y,
+                    ix: x0.floor() as i32,
+                    iy: y.floor() as i32,
+                    fx: x0 - x0.floor(),
+                    fy: y - y.floor(),
                     clip,
                     glow_color,
                 };
@@ -821,22 +849,29 @@ impl PixelRenderer {
             let rest = if state == State::Active { State::NotSung } else { state };
             let blur = (look.depth.max(0.0) as f32 * BLUR_KEY_SCALE).round() as u16;
             let idle = state == State::NotSung;
+            let (ix, sub_x) = split_subpixel(x0);
+            let (iy, sub_y) = split_subpixel(y);
             for pi in 0..part_count {
-                let part = self.layout.as_ref().unwrap().blocks[bi].parts[pi].clone();
-                let alpha = (rest_alpha(input, rest, &part, line, t) * fade * contrast).clamp(0.0, 1.0);
+                let alpha = {
+                    let part = &self.layout.as_ref().unwrap().blocks[bi].parts[pi];
+                    (rest_alpha(input, rest, part, line, t) * fade * contrast).clamp(0.0, 1.0)
+                };
                 if alpha <= 0.01 {
                     continue;
                 }
-                let key = (bi, pi, blur, idle);
-                if self.part_mask(bi, pi, blur, idle, input).is_some() {
-                    let mask = self.masks.get_mut(&key).unwrap();
+                let key = MaskKey { block: bi, part: pi, blur, idle, sub_x, sub_y };
+                if let Some(mask) = self.part_mask(key, input) {
                     let (mw, mh, mx, my) = (mask.w, mask.h, mask.x, mask.y);
                     let data = std::mem::take(&mut mask.data);
-                    self.canvas.draw_alpha(&data, mw, mh, x0 as i32 + mx, y as i32 + my, clip, |_| (text, alpha));
-                    self.masks.get_mut(&key).unwrap().data = data;
+                    self.canvas.draw_alpha(&data, mw, mh, ix + mx, iy + my, clip, |_| (text, alpha));
+                    if let Some((mask, _)) = self.masks.get_mut(&key) {
+                        mask.data = data;
+                    }
                 }
             }
         }
+        let frame = self.frame;
+        self.masks.retain(|_, (_, used)| frame - *used <= MASK_TTL_FRAMES);
         info.animating = animating;
         PixelFrame {
             info,
@@ -863,8 +898,8 @@ impl PixelRenderer {
                         &m.data,
                         m.w,
                         m.h,
-                        block.x0 as i32 + gx + m.x,
-                        block.y as i32 + gy + m.y,
+                        block.ix + gx + m.x,
+                        block.iy + gy + m.y,
                         block.clip,
                         |_| (block.glow_color, a),
                     );
@@ -877,8 +912,8 @@ impl PixelRenderer {
             &layer.data,
             layer.w,
             layer.h,
-            block.x0 as i32 + layer.x,
-            block.y as i32 + layer.y,
+            block.ix + layer.x,
+            block.iy + layer.y,
             block.clip,
             |_| (text, 1.0),
         );
@@ -906,8 +941,8 @@ impl PixelRenderer {
         let roman_k = if matches!(part.kind, PartKind::Roman { timed: true, .. }) { 0.82 } else { 1.0 };
         let (active, fade) = (block.active, block.fade);
         let mix = move |act: f32| ((rest + (act * roman_k - rest) * active) * contrast * fade).clamp(0.0, 1.0);
-        let px = part.x;
-        let py = part.top;
+        let px = part.x + block.fx;
+        let py = part.top + block.fy;
 
         let Some(group) = part_group(part.kind, line).filter(|_| kind == SyncKind::Syllable) else {
             let act = match (part.kind, kind, style) {
@@ -1156,8 +1191,10 @@ struct LiveBlock {
     active: f32,
     blur: f32,
     fade: f32,
-    x0: f32,
-    y: f32,
+    ix: i32,
+    iy: i32,
+    fx: f32,
+    fy: f32,
     clip: (i32, i32, i32, i32),
     glow_color: Rgb,
 }
@@ -1280,6 +1317,15 @@ mod tests {
                 assert!((c.1 - prev.1 - 0.1).abs() < 0.04, "y step {} at {off}", c.1 - prev.1);
             }
             last = Some(c);
+        }
+    }
+
+    #[test]
+    fn splits_positions_into_quarter_pixels() {
+        for v in [-3.3f32, -0.3, -0.05, 0.0, 0.2, 0.9, 2.62, 17.0] {
+            let (whole, sub) = split_subpixel(v);
+            assert!(sub < SUBPIXEL_STEPS as u8);
+            assert!((whole as f32 + sub as f32 / SUBPIXEL_STEPS - v).abs() <= 0.5 / SUBPIXEL_STEPS + 1e-4, "{v}");
         }
     }
 
