@@ -1,5 +1,6 @@
 pub mod cell;
 pub mod effects;
+pub mod pixel;
 pub mod scroll;
 
 use crate::anim::Rgb;
