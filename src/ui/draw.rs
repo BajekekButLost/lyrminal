@@ -365,7 +365,13 @@ fn modal(f: &mut Frame, theme: &Theme, title: &str, w: u16, h: u16) -> (Rect, Rg
         .style(style);
     let inner = block.inner(rect);
     f.render_widget(block, rect);
-    (inner, bg)
+    let padded = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(2),
+        height: inner.height,
+    };
+    (padded, bg)
 }
 
 fn draw_help(f: &mut Frame, theme: &Theme) {
@@ -477,7 +483,7 @@ fn draw_settings(f: &mut Frame, app: &App) {
         desc,
     );
     f.render_widget(
-        Paragraph::new("Tab section · ↑↓ move · ←→ change · Enter toggle/edit · K/J reorder · Esc close")
+        Paragraph::new("Tab section · ↑↓ move · ←→ change · ↵ edit · K/J reorder · Esc close")
             .style(panel_ink(theme, bg, 0.4)),
         footer,
     );

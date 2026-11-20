@@ -112,7 +112,10 @@ impl LrcRed {
             duration: h.duration,
             tier: Some(rate_tier(q, &h.title, &h.artists(), h.duration, self.tolerance)),
             kind_hint: None,
-            note: h.year.map(|y| y.to_string()),
+            note: Some(match h.year {
+                Some(y) => format!("{y} · ISRC {}", h.isrc),
+                None => format!("ISRC {}", h.isrc),
+            }),
         }
     }
 }
