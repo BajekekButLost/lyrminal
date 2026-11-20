@@ -85,6 +85,8 @@ pub const HELP: &[BindingGroup] = &[
             Binding { keys: "h l  ← →", desc: "Seek backward / forward" },
             Binding { keys: "n N", desc: "Next / previous track" },
             Binding { keys: "Enter", desc: "Jump to the line under the cursor while scrolling" },
+            Binding { keys: "Click bar", desc: "Seek; drag along the progress bar to scrub" },
+            Binding { keys: "Click lyric", desc: "Jump to that line or word (Settings → Scrolling)" },
         ],
     },
 ];

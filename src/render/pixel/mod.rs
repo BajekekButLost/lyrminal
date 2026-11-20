@@ -9,7 +9,8 @@ use ratatui::layout::Rect;
 use self::raster::{Canvas, Mask};
 use super::effects::{self, EdgeWord, bloom, spring};
 use super::scroll::{ScrollInput, Scroller};
-use super::{FrameInfo, FrameInput};
+use super::{FrameInfo, FrameInput, push_px_hit};
+use crate::config::ClickSeek;
 use crate::anim::{Rgb, Spring, lerp};
 use crate::config::{Alignment, Background, VisualStyle};
 use crate::lyrics::process::{self, ItemKind, Prepared, State};
@@ -569,6 +570,38 @@ impl PixelRenderer {
             }
             let ItemKind::Line(li) = it.kind else { continue };
             let part_count = self.layout.as_ref().unwrap().blocks[bi].parts.len();
+            if input.scroll.click_seek != ClickSeek::Off && kind != SyncKind::Static {
+                let line = &prepared.lyrics.lines[li];
+                let parts = &self.layout.as_ref().unwrap().blocks[bi].parts;
+                let clip_rows = (lyrics.y, lyrics.y + lyrics.height);
+                for part in parts {
+                    let group = match part.kind {
+                        PartKind::Lead | PartKind::Roman { timed: true, .. } => Some(&line.lead),
+                        PartKind::Bg(i) => line.background.get(i),
+                        _ => None,
+                    };
+                    let words_mode = input.scroll.click_seek == ClickSeek::Words && kind == SyncKind::Syllable && group.is_some();
+                    let mut boxes: HashMap<(i32, usize), (f32, f32, f32, f32, f64)> = HashMap::new();
+                    for g in part.glyphs.iter().filter(|g| !g.blank) {
+                        let key = (g.baseline as i32, if words_mode { g.word } else { 0 });
+                        let gx0 = x0 + part.x + g.glyph.x;
+                        let gx1 = gx0 + g.glyph.w;
+                        let by = y + part.top + g.baseline;
+                        let time = if words_mode {
+                            group.and_then(|gr| gr.syllables.get(g.syl)).map(|s| s.start).unwrap_or(it.start)
+                        } else {
+                            it.start
+                        };
+                        let e = boxes.entry(key).or_insert((gx0, by - part.size * 0.85, gx1, by + part.size * 0.25, time));
+                        e.0 = e.0.min(gx0);
+                        e.2 = e.2.max(gx1);
+                        e.4 = e.4.min(time);
+                    }
+                    for (_, (a, b, c, d, time)) in boxes {
+                        push_px_hit(&mut info.hits, (a, b, c, d), (cw, ch), clip_rows, time);
+                    }
+                }
+            }
             if !live {
                 let depth_blur = if input.appearance.depth_dimming && !manual && kind != SyncKind::Static {
                     (distance.min(5) as f32 * 0.03 * size).round() as u16
