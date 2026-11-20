@@ -232,24 +232,20 @@ pub trait LyricsProvider: Send + Sync {
 pub struct ProviderInfo {
     pub id: &'static str,
     pub name: &'static str,
-    pub needs_key: bool,
 }
 
 pub const KNOWN_PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
         id: spicy::ID,
         name: spicy::NAME,
-        needs_key: true,
     },
     ProviderInfo {
         id: lrcred::ID,
         name: lrcred::NAME,
-        needs_key: false,
     },
     ProviderInfo {
         id: lrclib::ID,
         name: lrclib::NAME,
-        needs_key: false,
     },
 ];
 
@@ -318,11 +314,11 @@ impl Registry {
                 ))),
                 lrcred::ID => providers.push(Arc::new(lrcred::LrcRed::new(
                     client.clone(),
-                    config.providers.duration_tolerance_secs,
+                    config.providers.lrc_red.duration_tolerance_secs,
                 ))),
                 lrclib::ID => providers.push(Arc::new(lrclib::Lrclib::new(
                     client.clone(),
-                    config.providers.duration_tolerance_secs,
+                    config.providers.lrclib.duration_tolerance_secs,
                 ))),
                 _ => {}
             }

@@ -13,9 +13,45 @@ pub struct Config {
     pub providers: ProvidersConfig,
     pub appearance: AppearanceConfig,
     pub lyrics: LyricsConfig,
+    pub scroll: ScrollConfig,
     pub sync: SyncConfig,
     pub controls: ControlsConfig,
     pub cache: CacheConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScrollAnimation {
+    Staggered,
+    Smooth,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClickSeek {
+    Off,
+    Lines,
+    Words,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ScrollConfig {
+    pub animation: ScrollAnimation,
+    pub speed: f64,
+    pub lead_ms: u32,
+    pub click_seek: ClickSeek,
+}
+
+impl Default for ScrollConfig {
+    fn default() -> Self {
+        Self {
+            animation: ScrollAnimation::Staggered,
+            speed: 1.0,
+            lead_ms: 300,
+            click_seek: ClickSeek::Lines,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -81,8 +117,9 @@ pub struct ProvidersConfig {
     pub order: Vec<String>,
     pub disabled: Vec<String>,
     pub spicy_lyrics: SpicyConfig,
+    pub lrc_red: SearchProviderConfig,
+    pub lrclib: SearchProviderConfig,
     pub prefer_synced: bool,
-    pub duration_tolerance_secs: f64,
 }
 
 impl Default for ProvidersConfig {
@@ -91,7 +128,22 @@ impl Default for ProvidersConfig {
             order: vec!["spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()],
             disabled: Vec::new(),
             spicy_lyrics: SpicyConfig::default(),
+            lrc_red: SearchProviderConfig::default(),
+            lrclib: SearchProviderConfig::default(),
             prefer_synced: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SearchProviderConfig {
+    pub duration_tolerance_secs: f64,
+}
+
+impl Default for SearchProviderConfig {
+    fn default() -> Self {
+        Self {
             duration_tolerance_secs: 2.0,
         }
     }
