@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use super::effects::{SCROLL_CURVE, ripple_delay};
 use crate::anim::Spring;
 
+const MANUAL_SPEEDUP: f64 = 3.0;
+
 #[derive(Debug, Clone, Copy)]
 struct Tween {
     from: f64,
@@ -95,7 +97,7 @@ impl Scroller {
             speed,
         } = input;
         let speed = speed.clamp(0.1, 5.0);
-        self.spring.frequency = speed;
+        self.spring.frequency = if manual { speed * MANUAL_SPEEDUP } else { speed };
         self.tweens.retain(|_, t| !t.done(now));
         if !self.initialized {
             self.initialized = true;

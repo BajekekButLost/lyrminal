@@ -15,7 +15,9 @@ pub struct TermCaps {
 
 impl TermCaps {
     pub fn refresh_cell_size(&mut self) {
-        self.cell_px = cell_size();
+        if let Some(size) = cell_size() {
+            self.cell_px = Some(size);
+        }
     }
 }
 
