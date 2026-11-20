@@ -3,7 +3,7 @@ pub mod raster;
 use std::collections::HashMap;
 use std::ops::Range;
 
-use cosmic_text::{Align, Attrs, Buffer, CacheKey, Family, FontSystem, LayoutGlyph, Metrics, Shaping, SwashCache, SwashContent, Weight, Wrap};
+use cosmic_text::{Align, Attrs, Buffer, CacheKey, Family, FontSystem, LayoutGlyph, Metrics, Shaping, SubpixelBin, SwashCache, SwashContent, Weight, Wrap};
 use ratatui::layout::Rect;
 
 use self::raster::{Canvas, Mask};
@@ -16,6 +16,8 @@ use crate::anim::{Rgb, Spring, lerp};
 use crate::config::{Alignment, Background, VisualStyle};
 use crate::lyrics::process::{self, ItemKind, Prepared, State};
 use crate::lyrics::{LyricLine, SyncKind, VocalGroup};
+
+const RASTER_STEP: f32 = 0.05;
 
 pub struct Fonts {
     pub system: FontSystem,
@@ -59,7 +61,44 @@ struct Part {
     glyphs: Vec<PGlyph>,
     syl_boxes: Vec<(f32, f32)>,
     syl_letters: Vec<usize>,
+    syl_words: Vec<usize>,
+    syl_rows: Vec<f32>,
     word_letters: Vec<usize>,
+}
+
+impl Part {
+    fn syllable_chain(&self, scale: impl Fn(usize) -> f32) -> Vec<(f32, f32)> {
+        let n = self.syl_boxes.len();
+        let mut out: Vec<(f32, f32)> = (0..n).map(|i| (0.0, scale(i))).collect();
+        let mut i = 0;
+        while i < n {
+            let mut j = i + 1;
+            while j < n && self.syl_words.get(j) == self.syl_words.get(i) && self.syl_rows[j] == self.syl_rows[i] {
+                j += 1;
+            }
+            let mut seg: Vec<usize> = (i..j).filter(|&k| self.syl_boxes[k].0 <= self.syl_boxes[k].1).collect();
+            seg.sort_by(|a, b| self.syl_boxes[*a].0.total_cmp(&self.syl_boxes[*b].0));
+            if let Some(&first) = seg.first() {
+                let lo = self.syl_boxes[first].0;
+                let hi = seg.iter().map(|&k| self.syl_boxes[k].1).fold(f32::MIN, f32::max);
+                let extent = |pos: usize| {
+                    let k = seg[pos];
+                    let end = seg.get(pos + 1).map(|&nk| self.syl_boxes[nk].0).unwrap_or(hi);
+                    (end - self.syl_boxes[k].0).max(0.0)
+                };
+                let total: f32 = (0..seg.len()).map(|pos| extent(pos) * out[seg[pos]].1).sum();
+                let mut cursor = (lo + hi) / 2.0 - total / 2.0;
+                for pos in 0..seg.len() {
+                    let k = seg[pos];
+                    let s = out[k].1;
+                    out[k].0 = cursor - self.syl_boxes[k].0 * s;
+                    cursor += extent(pos) * s;
+                }
+            }
+            i = j;
+        }
+        out
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -319,12 +358,16 @@ impl PixelRenderer {
         );
         let mut syl_boxes = vec![(f32::MAX, f32::MIN); group.syllables.len().max(1)];
         let mut syl_letters = vec![0usize; group.syllables.len().max(1)];
+        let mut syl_rows = vec![f32::NAN; group.syllables.len().max(1)];
         let mut word_letters = vec![0usize; words.len().max(1)];
         for g in glyphs.iter_mut() {
             if g.blank {
                 continue;
             }
             let si = g.syl.min(syl_boxes.len() - 1);
+            if syl_rows[si].is_nan() {
+                syl_rows[si] = g.baseline;
+            }
             let b = &mut syl_boxes[si];
             b.0 = b.0.min(g.glyph.x);
             b.1 = b.1.max(g.glyph.x + g.glyph.w);
@@ -333,6 +376,14 @@ impl PixelRenderer {
             let wl = g.word.min(word_letters.len() - 1);
             g.letter = word_letters[wl];
             word_letters[wl] += 1;
+        }
+        let mut known = syl_rows.iter().copied().find(|r| !r.is_nan()).unwrap_or(0.0);
+        for r in syl_rows.iter_mut() {
+            if r.is_nan() {
+                *r = known;
+            } else {
+                known = *r;
+            }
         }
         Part {
             kind,
@@ -344,6 +395,8 @@ impl PixelRenderer {
             glyphs,
             syl_boxes,
             syl_letters,
+            syl_words: words_of_syl,
+            syl_rows,
             word_letters,
         }
     }
@@ -468,15 +521,15 @@ impl PixelRenderer {
                 && input.style() == VisualStyle::Spring
                 && input.prepared.lyrics.kind == SyncKind::Syllable
                 && group.is_some();
+            let rest_scale = effects::SPLINES.word_scale.at(0.0) as f32;
+            let chain = part.syllable_chain(|_| rest_scale);
             for g in part.glyphs.iter().filter(|g| !g.blank) {
                 let baseline = part.top + g.baseline;
                 let (origin, scale) = if spring_idle {
                     let group = group.unwrap();
                     let si = g.syl.min(group.syllables.len() - 1);
-                    let (sx0, sx1) = part.syl_boxes[si];
-                    let syl_pivot = (part.x + (sx0 + sx1) / 2.0, baseline);
                     let mut origin = (part.x + g.glyph.x, baseline);
-                    let mut scale = effects::SPLINES.word_scale.at(0.0) as f32;
+                    let mut scale = rest_scale;
                     let mut lift = effects::SPLINES.word_lift.at(0.0) as f32;
                     if input.appearance.emphasis
                         && !matches!(part.kind, PartKind::Roman { .. })
@@ -488,8 +541,8 @@ impl PixelRenderer {
                         scale *= ls;
                         lift += 2.0 * effects::SPLINES.letter_lift.at(0.0) as f32;
                     }
-                    let o = scale_about(origin, syl_pivot, effects::SPLINES.word_scale.at(0.0) as f32);
-                    ((o.0, o.1 + lift * part.size), scale)
+                    let (a, s) = chain[si.min(chain.len() - 1)];
+                    ((part.x + a + (origin.0 - part.x) * s, origin.1 + lift * part.size), scale)
                 } else {
                     ((part.x + g.glyph.x, baseline), 1.0)
                 };
@@ -502,25 +555,31 @@ impl PixelRenderer {
     }
 
     fn stamp_glyph(&mut self, layer: &mut Mask, glyph: &LayoutGlyph, origin: (f32, f32), scale: f32, shade: impl FnMut(i32) -> f32) -> Option<(CacheKey, i32, i32)> {
-        let scale = (scale * 100.0).round() / 100.0;
-        let phys = glyph.physical((origin.0 - glyph.x * scale, 0.0), scale);
-        let draw_y = origin.1.round() as i32 + phys.y;
-        let img = self.fonts.swash.get_image(&mut self.fonts.system, phys.cache_key).as_ref()?;
+        let raster = ((scale / RASTER_STEP).round() * RASTER_STEP).max(RASTER_STEP);
+        let k = scale / raster;
+        let pen_x = origin.0 + glyph.font_size * glyph.x_offset * scale;
+        let pen_y = origin.1 + (glyph.y - glyph.font_size * glyph.y_offset) * scale;
+        let (mut cache_key, _, _) = CacheKey::new(glyph.font_id, glyph.glyph_id, glyph.font_size * raster, (0.0, 0.0), glyph.font_weight, glyph.cache_key_flags);
+        cache_key.x_bin = SubpixelBin::new(pen_x).1;
+        cache_key.y_bin = SubpixelBin::new(-pen_y).1;
+        let img = self.fonts.swash.get_image(&mut self.fonts.system, cache_key).as_ref()?;
         let (w, h) = (img.placement.width as usize, img.placement.height as usize);
-        let x = phys.x + img.placement.left;
-        let y = draw_y - img.placement.top;
+        let anchor_x = pen_x - cache_key.x_bin.as_float() * k;
+        let anchor_y = pen_y + cache_key.y_bin.as_float() * k;
+        let left = anchor_x + img.placement.left as f32 * k;
+        let top = anchor_y - img.placement.top as f32 * k;
         match img.content {
-            SwashContent::Mask => layer.stamp_shaded(&img.data, w, h, x, y, shade),
+            SwashContent::Mask => layer.stamp_resampled(&img.data, w, h, left, top, k, shade),
             SwashContent::SubpixelMask => {
                 let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[1]).collect();
-                layer.stamp_shaded(&a, w, h, x, y, shade)
+                layer.stamp_resampled(&a, w, h, left, top, k, shade)
             }
             SwashContent::Color => {
                 let a: Vec<u8> = img.data.chunks_exact(4).map(|p| p[3]).collect();
-                layer.stamp_shaded(&a, w, h, x, y, shade)
+                layer.stamp_resampled(&a, w, h, left, top, k, shade)
             }
         }
-        Some((phys.cache_key, phys.x, draw_y))
+        Some((cache_key, anchor_x.round() as i32, anchor_y.round() as i32))
     }
 
     fn glow_mask(&mut self, key: CacheKey, radius: f32) -> Option<Mask> {
@@ -961,6 +1020,17 @@ impl PixelRenderer {
             }
         }
 
+        let chain = if style == VisualStyle::Spring {
+            let anims = &self.anims;
+            part.syllable_chain(|si| {
+                anims
+                    .get(&(bi, part.kind, si))
+                    .map(|a| a.scale.position as f32)
+                    .unwrap_or_else(|| effects::SPLINES.word_scale.at(0.0) as f32)
+            })
+        } else {
+            Vec::new()
+        };
         let glyphs = part.glyphs.clone();
         for g in glyphs.iter().filter(|g| !g.blank) {
             let si = g.syl.min(group.syllables.len() - 1);
@@ -975,7 +1045,8 @@ impl PixelRenderer {
             match style {
                 VisualStyle::Spring => {
                     let syl = self.anims.get(&(bi, part.kind, si)).copied().unwrap_or_else(SylAnim::new);
-                    let syl_pivot = (px + sx0 + sw / 2.0, baseline);
+                    let (ca, cs) = chain[si.min(chain.len() - 1)];
+                    let place = |x: f32| px + ca + (x - px) * cs;
                     let emphasized = emphasis_on && process::spring_emphasis(s);
                     let (origin, scale, lift, glow, fill_p, fill_x0, fill_w) = if emphasized {
                         let n = part.syl_letters.get(si).copied().unwrap_or(1).max(1);
@@ -983,26 +1054,26 @@ impl PixelRenderer {
                         let letter = self.letters.get(&(bi, part.kind, si, k)).copied().unwrap_or_else(SylAnim::letter);
                         let (ws, we) = effects::spring_letter_window(s.start, s.end, n, k);
                         let letter_pivot = (gx0 + gw / 2.0, baseline);
-                        let o = scale_about(origin0, letter_pivot, letter.scale.position as f32);
-                        let o = scale_about(o, syl_pivot, syl.scale.position as f32);
+                        let ls = letter.scale.position as f32;
+                        let o = scale_about(origin0, letter_pivot, ls);
                         (
-                            o,
-                            (letter.scale.position * syl.scale.position) as f32,
+                            (place(o.0), o.1),
+                            ls * cs,
                             syl.lift.position + 2.0 * letter.lift.position,
                             letter.glow.position as f32,
                             effects::spring_letter_fill(t, ws, we),
-                            gx0,
-                            gw,
+                            place(o.0),
+                            gw * ls * cs,
                         )
                     } else {
                         (
-                            scale_about(origin0, syl_pivot, syl.scale.position as f32),
-                            syl.scale.position as f32,
+                            (place(gx0), baseline),
+                            cs,
                             syl.lift.position,
                             syl.glow.position as f32 * 0.5,
                             process::progress(t, s.start, s.end),
-                            px + sx0,
-                            sw,
+                            place(px + sx0),
+                            sw * cs,
                         )
                     };
                     let origin = (origin.0, origin.1 + lift as f32 * size);
@@ -1163,6 +1234,66 @@ mod tests {
             t = end + 0.4;
         }
         Lyrics { kind: crate::lyrics::SyncKind::Syllable, lines, credits: Credits::default(), language: None, instrumental: false }
+    }
+
+    fn centroid(mask: &Mask) -> (f64, f64) {
+        let (mut sx, mut sy, mut m) = (0.0, 0.0, 0.0);
+        for r in 0..mask.h {
+            for c in 0..mask.w {
+                let a = mask.data[r * mask.w + c] as f64;
+                sx += a * c as f64;
+                sy += a * r as f64;
+                m += a;
+            }
+        }
+        (sx / m, sy / m)
+    }
+
+    #[test]
+    fn glyphs_move_by_subpixel_steps() {
+        let mut renderer = PixelRenderer::new(load_fonts());
+        let (glyphs, _) = shape(
+            &mut renderer.fonts,
+            ShapeSpec { text: "o", ranges: &[0..1], words_of_syl: &[0], size: 44.0, width: 400.0, align: Align::Left, family: "", weight: 700 },
+        );
+        let glyph = glyphs[0].glyph.clone();
+        let mut last: Option<(f64, f64)> = None;
+        for step in 0..=20 {
+            let off = step as f32 * 0.1;
+            let mut mask = Mask::new(0, 0, 80, 80);
+            renderer.stamp_glyph(&mut mask, &glyph, (10.0 + off, 50.0 + off), 1.0, |_| 1.0);
+            let c = centroid(&mask);
+            if let Some(prev) = last {
+                assert!((c.0 - prev.0 - 0.1).abs() < 0.04, "x step {} at {off}", c.0 - prev.0);
+                assert!((c.1 - prev.1 - 0.1).abs() < 0.04, "y step {} at {off}", c.1 - prev.1);
+            }
+            last = Some(c);
+        }
+    }
+
+    #[test]
+    fn syllables_stay_joined_while_scaled() {
+        let mut renderer = PixelRenderer::new(load_fonts());
+        let group = words("brigh|ter to|night", 0.0, 0.3);
+        let part = renderer.build_part(PartKind::Lead, &group, false, 44.0, 800.0, 0.0, Align::Left, "", 700);
+        let uniform = part.syllable_chain(|_| 0.95);
+        for (si, &(a, s)) in uniform.iter().enumerate() {
+            let (x0, x1) = part.syl_boxes[si];
+            let w = part.syl_words[si];
+            let segment: Vec<usize> = (0..part.syl_boxes.len()).filter(|&k| part.syl_words[k] == w).collect();
+            let lo = segment.iter().map(|&k| part.syl_boxes[k].0).fold(f32::MAX, f32::min);
+            let hi = segment.iter().map(|&k| part.syl_boxes[k].1).fold(f32::MIN, f32::max);
+            let centre = (lo + hi) / 2.0;
+            assert!((a + x0 * s - (centre + (x0 - centre) * 0.95)).abs() < 1e-3);
+            assert!((a + x1 * s - (centre + (x1 - centre) * 0.95)).abs() < 1e-3);
+        }
+        let scales = [0.95, 1.05, 1.0, 0.97];
+        let mixed = part.syllable_chain(|si| scales[si]);
+        for (left, right) in [(0, 1), (2, 3)] {
+            let end = mixed[left].0 + part.syl_boxes[right].0 * mixed[left].1;
+            let start = mixed[right].0 + part.syl_boxes[right].0 * mixed[right].1;
+            assert!((end - start).abs() < 1e-3, "gap {} between syllables {left} and {right}", start - end);
+        }
     }
 
     #[test]
