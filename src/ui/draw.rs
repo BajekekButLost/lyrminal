@@ -921,6 +921,14 @@ impl Graphics {
         Ok(())
     }
 
+    pub fn screen_cleared(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if let Some((id, _)) = self.art.take() {
+            kitty::delete_image(out, id)?;
+        }
+        self.placed = None;
+        Ok(())
+    }
+
     pub fn clear(&mut self, out: &mut impl Write) -> io::Result<()> {
         if let Some((id, _)) = self.art.take() {
             kitty::delete_image(out, id)?;

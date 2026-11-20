@@ -98,6 +98,7 @@ async fn run(
 ) -> Result<()> {
     let mut events = EventStream::new();
     let mut next_frame = tokio::time::Instant::now();
+    let mut last_area = None;
     loop {
         tokio::select! {
             _ = tokio::time::sleep_until(next_frame) => {}
@@ -128,13 +129,19 @@ async fn run(
         let animating = app.needs_animation();
         let dt = app.begin_frame(now);
         let mut output = None;
-        terminal.draw(|f| {
-            output = Some(draw::draw(f, app, now, dt));
-        })?;
+        let area = terminal
+            .draw(|f| {
+                output = Some(draw::draw(f, app, now, dt));
+            })?
+            .area;
+        let resized = last_area.replace(area).is_some_and(|a| a != area);
         app.dirty = false;
         let pixel = output.as_ref().is_some_and(|o| o.pixel);
         if let Some(out) = output {
             let mut stdout = std::io::stdout().lock();
+            if resized {
+                gfx.screen_cleared(&mut stdout)?;
+            }
             if out.pixel {
                 if let Some(p) = app.pixel.as_ref() {
                     let size = terminal.size()?;
