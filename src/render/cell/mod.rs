@@ -460,7 +460,8 @@ impl CellRenderer {
             RowKind::Roman { group, .. } => (*group, true),
             _ => (Group::Lead, false),
         };
-        let background = matches!(group_ref, Group::Bg(_));
+        let background = matches!(group_ref, Group::Bg(_))
+            || line_idx.is_some_and(|li| prepared.lyrics.lines.get(li).is_some_and(|l| l.background_only));
         let scale_for = |a: f32| if roman { a * 0.82 } else { a };
         let mut ink = Ink::new(0.0);
         ink.italic = background || roman;
