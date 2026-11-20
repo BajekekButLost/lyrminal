@@ -25,6 +25,7 @@ pub struct DrawOutput {
     pub art: Option<Placement>,
     pub links: Vec<LinkSpan>,
     pub lyrics_area: Rect,
+    pub pixel: bool,
 }
 
 fn ink(theme: &Theme, alpha: f32) -> Style {
@@ -84,7 +85,10 @@ fn spinner(app: &App) -> &'static str {
 
 pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     let theme = app.theme;
-    paint_background(f, &theme);
+    let pixel = app.pixel_active();
+    if !pixel {
+        paint_background(f, &theme);
+    }
     let area = f.area();
     let has_track = app.track.is_some();
     let header_h = if app.cfg.appearance.show_header && has_track { 5 } else { 0 };
@@ -119,6 +123,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
         art: if overlay_open { None } else { art },
         links: if overlay_open { Vec::new() } else { links },
         lyrics_area,
+        pixel,
     }
 }
 
@@ -208,8 +213,33 @@ fn draw_lyrics(f: &mut Frame, app: &mut App, area: Rect, now: Instant, dt: f64, 
             let wall = app.wall();
             let screen_height = f.area().height;
             let show_cursor = app.cfg.controls.enabled;
-            if app.use_pixel() {
-                app.frame.animating = true;
+            if app.pixel_active()
+                && let Some(cell) = app.caps.cell_px
+            {
+                let screen = f.area();
+                let input = FrameInput {
+                    prepared: &prepared,
+                    t,
+                    wall,
+                    dt,
+                    theme: &theme,
+                    appearance: &app.cfg.appearance,
+                    lyrics: &app.cfg.lyrics,
+                    follow: &app.follow,
+                    screen_height,
+                    show_cursor,
+                };
+                let pixel = app.pixel.as_mut().unwrap();
+                let out = pixel.render(&input, id, screen, area, cell);
+                if let Some(cy) = out.credits_y {
+                    draw_pixel_credits(f, &theme, &prepared.lyrics.credits, area, cell, cy, out.content_x, prepared.all_sung(t), links);
+                }
+                if show_cursor && app.follow.manual && out.info.cursor_item.is_some() {
+                    let y = area.y + (area.height as f32 * 0.4) as u16;
+                    let x = ((out.content_x / cell.0) as u16).saturating_sub(2);
+                    f.buffer_mut().set_string(x, y, "▌", accent(&theme));
+                }
+                app.frame = out.info;
                 return;
             }
             let input = FrameInput {
@@ -260,6 +290,53 @@ fn draw_lyrics(f: &mut Frame, app: &mut App, area: Rect, now: Instant, dt: f64, 
             lines.push(Line::default());
             lines.push(dim("s: search every provider · R: try again · o: settings".into()));
             centered_message(f, &theme, area, lines);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_pixel_credits(
+    f: &mut Frame,
+    theme: &Theme,
+    credits: &crate::lyrics::Credits,
+    area: Rect,
+    cell: (f32, f32),
+    credits_y: f32,
+    content_x: f32,
+    all_sung: bool,
+    links: &mut Vec<LinkSpan>,
+) {
+    let col = (content_x / cell.0).round() as u16;
+    let width = (area.x + area.width).saturating_sub(col + 2);
+    let rows = crate::render::cell::layout::credit_rows(credits, width, crate::render::cell::layout::Align::Left);
+    let first = (credits_y / cell.1).ceil() as i32;
+    let screen_h = f.area().height;
+    for (i, row) in rows.iter().enumerate() {
+        let y = first + i as i32;
+        if y < area.y as i32 || y >= (area.y + area.height) as i32 {
+            continue;
+        }
+        let y = y as u16;
+        let bg = if theme.paint == Background::None { theme.base } else { theme.bg_at(y, screen_h) };
+        let emphasis = matches!(row.kind, crate::render::cell::layout::RowKind::Credit { emphasis: true });
+        let alpha = if all_sung { 0.8 } else { 0.5 } * if emphasis { 1.0 } else { 0.8 };
+        let fg = bg.mix(theme.text, alpha);
+        let text: String = row.glyphs.iter().map(|g| g.text.as_str()).collect();
+        let mut style = Style::default().fg(fg.to_color());
+        if row.link.is_some() {
+            style = style.add_modifier(Modifier::UNDERLINED);
+        }
+        f.buffer_mut().set_string(col, y, &text, style);
+        if let Some(url) = &row.link {
+            links.push(LinkSpan {
+                x: col,
+                y,
+                text,
+                url: url.clone(),
+                fg,
+                bg: None,
+                bold: false,
+            });
         }
     }
 }
@@ -639,14 +716,51 @@ fn draw_syncs(f: &mut Frame, app: &App) {
     );
 }
 
+const PIXEL_IDS: [u32; 2] = [9001, 9002];
+const UNDER_BACKGROUNDS: i32 = -1_073_741_825;
+
 #[derive(Default)]
 pub struct Graphics {
     art: Option<(u32, String)>,
     placed: Option<Placement>,
     next_id: u32,
+    pixel_current: Option<u32>,
+    pixel_seq: u64,
 }
 
 impl Graphics {
+    pub fn send_pixel(&mut self, out: &mut impl Write, canvas: &crate::render::pixel::raster::Canvas, cols: u16, rows: u16, remote: bool) -> io::Result<()> {
+        let id = if self.pixel_current == Some(PIXEL_IDS[0]) { PIXEL_IDS[1] } else { PIXEL_IDS[0] };
+        self.pixel_seq += 1;
+        let straight;
+        let data: &[u8] = if canvas.is_opaque() {
+            &canvas.px
+        } else {
+            straight = canvas.straight_rgba();
+            &straight
+        };
+        if remote {
+            kitty::transmit_direct(out, id, canvas.w as u32, canvas.h as u32, data)?;
+        } else {
+            kitty::transmit_temp_file(out, id, canvas.w as u32, canvas.h as u32, data, self.pixel_seq)?;
+            kitty::forget_old_temp_files(self.pixel_seq, 4);
+        }
+        kitty::place(out, id, 1, Placement { col: 0, row: 0, cols, rows }, UNDER_BACKGROUNDS)?;
+        if let Some(old) = self.pixel_current.replace(id)
+            && old != id
+        {
+            kitty::delete_image(out, old)?;
+        }
+        Ok(())
+    }
+
+    pub fn clear_pixel(&mut self, out: &mut impl Write) -> io::Result<()> {
+        if let Some(id) = self.pixel_current.take() {
+            kitty::delete_image(out, id)?;
+        }
+        Ok(())
+    }
+
     pub fn sync_art(&mut self, out: &mut impl Write, app: &App, want: Option<Placement>) -> io::Result<()> {
         let artwork = app.artwork.as_ref().filter(|_| app.caps.kitty_graphics);
         let want = want.filter(|_| artwork.is_some());
@@ -685,7 +799,7 @@ impl Graphics {
             kitty::delete_image(out, id)?;
         }
         self.placed = None;
-        Ok(())
+        self.clear_pixel(out)
     }
 }
 

@@ -137,13 +137,27 @@ async fn run(
             output = Some(draw::draw(f, app, now, dt));
         })?;
         app.dirty = false;
+        let pixel = output.as_ref().is_some_and(|o| o.pixel);
         if let Some(out) = output {
             let mut stdout = std::io::stdout().lock();
+            if out.pixel {
+                if let Some(p) = app.pixel.as_ref() {
+                    let size = terminal.size()?;
+                    gfx.send_pixel(&mut stdout, &p.canvas, size.width, size.height, app.caps.remote)?;
+                }
+            } else {
+                gfx.clear_pixel(&mut stdout)?;
+            }
             gfx.sync_art(&mut stdout, app, out.art)?;
             draw::write_links(&mut stdout, &out.links)?;
             stdout.flush()?;
         }
-        let fps = app.cfg.appearance.fps.clamp(15, 240) as f64;
+        let fps = if pixel {
+            let cap = if app.caps.remote { 8 } else { 60 };
+            app.cfg.appearance.pixel_fps.clamp(5, cap) as f64
+        } else {
+            app.cfg.appearance.fps.clamp(15, 240) as f64
+        };
         let frame = Duration::from_secs_f64(1.0 / fps);
         next_frame = tnow + if animating || app.needs_animation() { frame } else { IDLE_FRAME };
     }

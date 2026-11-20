@@ -14,6 +14,7 @@ use crate::providers::resolve::{self, Attempt, Outcome, Resolution};
 use crate::providers::{Candidate, Registry, TrackQuery, ordered_ids};
 use crate::render::{FrameInfo, Follow};
 use crate::render::cell::CellRenderer;
+use crate::render::pixel::{Fonts, PixelRenderer};
 use crate::state::State;
 use crate::term::TermCaps;
 use crate::theme::{Artwork, Theme};
@@ -96,6 +97,7 @@ pub enum AppMsg {
     Search { generation: u64, provider: String, result: Result<Vec<Candidate>, String> },
     Fetched { generation: u64, candidate: Candidate, result: Result<Lyrics, String> },
     CacheCleared(Result<(), String>),
+    Fonts(Box<Fonts>),
 }
 
 pub struct App {
@@ -122,6 +124,8 @@ pub struct App {
     art_loading: Option<String>,
     pub theme: Theme,
     pub cell: CellRenderer,
+    pub pixel: Option<PixelRenderer>,
+    fonts_loading: bool,
     pub follow: Follow,
     last_scroll: Instant,
     pub overlay: Overlay,
@@ -173,6 +177,8 @@ impl App {
             art_loading: None,
             theme,
             cell: CellRenderer::default(),
+            pixel: None,
+            fonts_loading: false,
             follow: Follow::default(),
             last_scroll: now,
             overlay: Overlay::None,
@@ -190,6 +196,7 @@ impl App {
         if app.cfg.appearance.renderer == Renderer::Pixel && !app.pixel_supported() {
             app.notify("Pixel renderer needs kitty graphics; using the cell renderer");
         }
+        app.ensure_fonts();
         app
     }
 
@@ -199,6 +206,22 @@ impl App {
 
     pub fn use_pixel(&self) -> bool {
         self.cfg.appearance.renderer == Renderer::Pixel && self.pixel_supported()
+    }
+
+    pub fn pixel_active(&self) -> bool {
+        self.use_pixel() && self.pixel.is_some() && matches!(self.lyrics, LyricsState::Ready { .. })
+    }
+
+    fn ensure_fonts(&mut self) {
+        if !self.use_pixel() || self.pixel.is_some() || self.fonts_loading {
+            return;
+        }
+        self.fonts_loading = true;
+        let tx = self.msg_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            let fonts = crate::render::pixel::load_fonts();
+            let _ = tx.send(AppMsg::Fonts(Box::new(fonts)));
+        });
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -264,6 +287,9 @@ impl App {
             id,
         };
         self.cell.reset();
+        if let Some(p) = self.pixel.as_mut() {
+            p.reset();
+        }
         self.dirty = true;
     }
 
@@ -515,6 +541,10 @@ impl App {
                     Err(e) => p.error = Some(e),
                 }
             }
+            AppMsg::Fonts(fonts) => {
+                self.fonts_loading = false;
+                self.pixel = Some(PixelRenderer::new(*fonts));
+            }
             AppMsg::CacheCleared(r) => match r {
                 Ok(()) => self.notify("Cache cleared"),
                 Err(e) => self.notify(format!("Could not clear the cache: {e}")),
@@ -539,6 +569,9 @@ impl App {
             Event::Resize(..) => {
                 self.caps.refresh_cell_size();
                 self.cell.reset();
+                if let Some(p) = self.pixel.as_mut() {
+                    p.reset();
+                }
             }
             _ => {}
         }
@@ -716,6 +749,7 @@ impl App {
             }
             self.load_artwork();
             self.retheme();
+            self.ensure_fonts();
         }
         let prep_changed = self.cfg.appearance.style != old.appearance.style
             || self.cfg.appearance.fade_previous != old.appearance.fade_previous
