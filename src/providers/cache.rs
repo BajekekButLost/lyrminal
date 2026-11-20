@@ -8,6 +8,7 @@ use super::Candidate;
 use crate::lyrics::Lyrics;
 
 const NEGATIVE_TTL_SECS: u64 = 60 * 60 * 12;
+pub const MAX_TTL_DAYS: u32 = 30;
 
 #[derive(Debug, Clone)]
 pub struct Cache {
@@ -44,7 +45,7 @@ impl Cache {
     pub fn new(dir: PathBuf, ttl_days: u32, enabled: bool) -> Self {
         Self {
             dir,
-            ttl_secs: ttl_days as u64 * 86_400,
+            ttl_secs: ttl_days.clamp(1, MAX_TTL_DAYS) as u64 * 86_400,
             enabled,
         }
     }
