@@ -707,11 +707,6 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     },
                 ),
                 item("Clear cache", "Delete every cached lyric and lookup.", Kind::Action(SettingsAction::ClearCache)),
-                item(
-                    "Reset all settings",
-                    "Restore every setting to its default. Your API key is kept.",
-                    Kind::Action(SettingsAction::ResetDefaults),
-                ),
             ],
         },
         Section {
@@ -733,6 +728,11 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     Kind::Info,
                 ),
                 item("Config file", &crate::config::Config::path().display().to_string(), Kind::Info),
+                item(
+                    "Reset all settings",
+                    "Restore every setting to its default, including API keys.",
+                    Kind::Action(SettingsAction::ResetDefaults),
+                ),
             ],
         },
     ]
