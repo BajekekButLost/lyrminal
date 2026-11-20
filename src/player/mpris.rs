@@ -56,6 +56,9 @@ trait MediaPlayer2 {
     fn desktop_entry(&self) -> zbus::Result<String>;
 }
 
+const BURST_INTERVAL: Duration = Duration::from_millis(100);
+const BURST_LENGTH: Duration = Duration::from_millis(3500);
+
 enum SelEvent {
     Changed,
     Seeked(i64),
@@ -279,8 +282,10 @@ async fn run_conn(
     let _ = ev_tx.send(PlayerEvent::Players(players.clone()));
     let mut selected: Option<Selected> = None;
     let mut sel_stream: SelStream = Box::pin(stream::pending());
-    let mut poll = tokio::time::interval(Duration::from_millis(cfg.poll_interval_ms.clamp(100, 5000)));
+    let mut poll = tokio::time::interval(BURST_INTERVAL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut next_poll = Instant::now();
+    let mut burst_until = Instant::now() + BURST_LENGTH;
     let mut rescan = tokio::time::interval(Duration::from_secs(2));
     rescan.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut need_reselect = true;
@@ -306,6 +311,8 @@ async fn run_conn(
                                 last: Some(snap),
                             });
                             sel_stream = s;
+                            burst_until = Instant::now() + BURST_LENGTH;
+                            next_poll = Instant::now();
                         }
                         Err(e) => {
                             let _ = ev_tx.send(PlayerEvent::Error(format!("cannot watch {}: {e}", info.bus)));
@@ -347,6 +354,16 @@ async fn run_conn(
                 }
             }
             _ = poll.tick() => {
+                let now = Instant::now();
+                if now < next_poll {
+                    continue;
+                }
+                let interval = if now < burst_until {
+                    BURST_INTERVAL
+                } else {
+                    Duration::from_millis(cfg.poll_interval_ms.clamp(100, 5000))
+                };
+                next_poll = now + interval - Duration::from_millis(5);
                 if let Some(sel) = selected.as_ref() {
                     let before = Instant::now();
                     if let Ok(us) = sel.player.position().await {
@@ -383,6 +400,8 @@ async fn run_conn(
                             }
                             sel.last = Some(snap.clone());
                             let _ = ev_tx.send(PlayerEvent::Active(Some(snap)));
+                            burst_until = Instant::now() + BURST_LENGTH;
+                            next_poll = Instant::now();
                         }
                     }
                     Some(SelEvent::Seeked(us)) => {
@@ -391,6 +410,8 @@ async fn run_conn(
                             at: Instant::now(),
                             seeked: true,
                         });
+                        burst_until = Instant::now() + BURST_LENGTH;
+                        next_poll = Instant::now() + BURST_INTERVAL;
                     }
                     None => {
                         selected = None;
@@ -403,12 +424,8 @@ async fn run_conn(
                 let Some(cmd) = cmd else { return Ok(()) };
                 match cmd {
                     PlayerCommand::Reconfigure(new_cfg) => {
-                        let interval_changed = new_cfg.poll_interval_ms != cfg.poll_interval_ms;
                         *cfg = new_cfg;
-                        if interval_changed {
-                            poll = tokio::time::interval(Duration::from_millis(cfg.poll_interval_ms.clamp(100, 5000)));
-                            poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                        }
+                        next_poll = Instant::now();
                         let current = selected.as_ref().map(|s| s.bus.clone());
                         if choose(&players, cfg, current.as_deref()).map(|p| p.bus.clone()) != current {
                             selected = None;
