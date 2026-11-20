@@ -37,6 +37,8 @@ pub mod spring {
     pub const BG_UNLIT: f32 = 0.26;
     pub const BG_LIT: f32 = 0.8;
     pub const LETTER_TAIL: f64 = 0.25;
+    pub const DOT_GROW: f64 = 0.3;
+    pub const DOT_APPEAR: f64 = 0.14;
 }
 
 pub mod bloom {
@@ -179,6 +181,7 @@ pub struct Dot {
     pub opacity: f64,
     pub glow: f64,
     pub lift: f64,
+    pub spread: f64,
 }
 
 pub fn spring_dots(t: f64, start: f64, end: f64) -> [Dot; 3] {
@@ -188,20 +191,24 @@ pub fn spring_dots(t: f64, start: f64, end: f64) -> [Dot; 3] {
     let local = t - start;
     let hide = clamp01((local - (dur - 0.5)) / 0.4);
     let shrink = 1.0 - hide * hide;
+    let grow = EASE.ease(clamp01(local / spring::DOT_GROW));
+    let appear = EASE.ease(clamp01(local / spring::DOT_APPEAR));
     let mut out = [Dot {
         fill: 0.0,
         scale: 0.75,
         opacity: 0.35,
         glow: 0.0,
         lift: 0.0,
+        spread: 1.0,
     }; 3];
     for (i, d) in out.iter_mut().enumerate() {
         let p = clamp01((local - each * i as f64) / each);
         d.fill = p;
-        d.scale = SPLINES.dot_scale.at(p) * shrink;
-        d.opacity = SPLINES.dot_opacity.at(p) * shrink;
-        d.glow = SPLINES.dot_glow.at(p) * shrink;
-        d.lift = SPLINES.dot_lift.at(p);
+        d.scale = SPLINES.dot_scale.at(p) * shrink * grow;
+        d.opacity = SPLINES.dot_opacity.at(p) * shrink * appear;
+        d.glow = SPLINES.dot_glow.at(p) * shrink * grow;
+        d.lift = SPLINES.dot_lift.at(p) * grow;
+        d.spread = grow;
     }
     out
 }
@@ -237,6 +244,7 @@ pub fn bloom_dots(t: f64, start: f64, end: f64) -> [Dot; 3] {
         opacity: 0.0,
         glow: 0.0,
         lift: 0.0,
+        spread: 1.0,
     }; 3];
     for (i, d) in out.iter_mut().enumerate() {
         let fill_start = share * i as f64;
@@ -299,6 +307,16 @@ mod tests {
         let late = bloom_flame(5.0, 2.0, 4, 0);
         assert!(early < mid);
         assert!(late < mid);
+    }
+
+    #[test]
+    fn spring_dots_grow_in() {
+        let first = spring_dots(0.0, 0.0, 6.0);
+        assert!(first.iter().all(|d| d.scale == 0.0 && d.opacity == 0.0 && d.spread == 0.0));
+        let mid = spring_dots(0.1, 0.0, 6.0);
+        assert!(mid[0].scale > 0.0 && mid[0].spread > 0.0 && mid[0].spread < 1.0);
+        let settled = spring_dots(0.5, 0.0, 6.0);
+        assert!(settled.iter().all(|d| d.spread == 1.0 && d.scale >= 0.75));
     }
 
     #[test]

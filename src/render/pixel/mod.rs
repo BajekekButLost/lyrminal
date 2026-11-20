@@ -761,7 +761,7 @@ impl PixelRenderer {
                     };
                     let cy = y + size * 0.45;
                     for (i, d) in dots.iter().enumerate() {
-                        let cx = bx + i as f32 * spacing;
+                        let cx = bx + spacing + (i as f32 - 1.0) * spacing * d.spread as f32;
                         let r = r0 * d.scale as f32;
                         let dy = d.lift as f32 * size;
                         let alpha = if style == VisualStyle::Bloom { d.opacity as f32 } else { (d.opacity * (0.55 + 0.4 * d.fill)) as f32 };
