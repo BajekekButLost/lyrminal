@@ -10,9 +10,9 @@ use ratatui::style::{Modifier, Style};
 use self::layout::{Group, Layout, LayoutOptions, Row, RowKind, build, row_x};
 use super::effects::{self, EdgeWord, bloom, spring};
 use super::scroll::{ScrollInput, Scroller};
-use super::{FrameInfo, FrameInput, LinkSpan};
+use super::{FrameInfo, FrameInput, Hit, LinkSpan};
 use crate::anim::{Rgb, lerp};
-use crate::config::{Alignment, Background, VisualStyle};
+use crate::config::{Alignment, Background, ClickSeek, VisualStyle};
 use crate::lyrics::process::{self, ItemKind, Prepared, State};
 use crate::lyrics::{SyncKind, VocalGroup};
 
@@ -339,6 +339,43 @@ impl CellRenderer {
                         link_ink.get_or_insert(ink);
                     }
                     put(buf, x, sy, &glyph.text, ink, input, base_bg, bg);
+                }
+                if input.scroll.click_seek != ClickSeek::Off
+                    && kind != SyncKind::Static
+                    && let (Some(li), Some((_, it))) = (line_idx, item)
+                    && !row.glyphs.is_empty()
+                {
+                    let group_ref = match &row.kind {
+                        RowKind::Lyric(g) | RowKind::Roman { group: g, timed: true } => Some(*g),
+                        _ => None,
+                    };
+                    let group = group_ref.and_then(|g| group_of(prepared, li, g));
+                    match group {
+                        Some(group) if input.scroll.click_seek == ClickSeek::Words && kind == SyncKind::Syllable => {
+                            let mut current: Option<(usize, u16, u16, f64)> = None;
+                            for g in row.glyphs.iter().filter(|g| !g.space) {
+                                let start = group.syllables.get(g.syl).map(|s| s.start).unwrap_or(it.start);
+                                match current.as_mut() {
+                                    Some((w, _, x1, _)) if *w == g.word => *x1 = rx + g.col + g.width,
+                                    _ => {
+                                        if let Some((_, x0, x1, time)) = current.take() {
+                                            info.hits.push(Hit { y: sy, x0, x1, time });
+                                        }
+                                        current = Some((g.word, rx + g.col, rx + g.col + g.width, start));
+                                    }
+                                }
+                            }
+                            if let Some((_, x0, x1, time)) = current {
+                                info.hits.push(Hit { y: sy, x0, x1, time });
+                            }
+                        }
+                        _ => info.hits.push(Hit {
+                            y: sy,
+                            x0: rx,
+                            x1: rx + row.width,
+                            time: it.start,
+                        }),
+                    }
                 }
                 if link_row
                     && let (Some(url), Some(ink)) = (row.link.clone(), link_ink)

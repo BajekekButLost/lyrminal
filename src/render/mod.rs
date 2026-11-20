@@ -67,6 +67,27 @@ pub struct FrameInfo {
     pub animating: bool,
     pub cursor_item: Option<usize>,
     pub links: Vec<LinkSpan>,
+    pub hits: Vec<Hit>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Hit {
+    pub y: u16,
+    pub x0: u16,
+    pub x1: u16,
+    pub time: f64,
+}
+
+pub fn push_px_hit(hits: &mut Vec<Hit>, rect: (f32, f32, f32, f32), cell: (f32, f32), clip_rows: (u16, u16), time: f64) {
+    let (x0, y0, x1, y1) = rect;
+    let (cw, ch) = cell;
+    let r0 = (y0 / ch).floor().max(clip_rows.0 as f32) as u16;
+    let r1 = ((y1 / ch).ceil() as u16).min(clip_rows.1);
+    let c0 = (x0 / cw).floor().max(0.0) as u16;
+    let c1 = (x1 / cw).ceil().max(0.0) as u16;
+    for y in r0..r1 {
+        hits.push(Hit { y, x0: c0, x1: c1, time });
+    }
 }
 
 #[derive(Debug, Clone)]

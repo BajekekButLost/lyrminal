@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseEventKind};
+use crossterm::event::{Event, KeyEvent, KeyEventKind, MouseButton, MouseEventKind};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::config::{Config, PlayerMode, Renderer, VisualStyle};
@@ -136,6 +136,8 @@ pub struct App {
     next_prepared_id: usize,
     pub frame: FrameInfo,
     pub dirty: bool,
+    pub progress_bar: Option<(u16, u16, u16)>,
+    pub scrub: Option<f64>,
 }
 
 impl App {
@@ -189,6 +191,8 @@ impl App {
             next_prepared_id: 1,
             frame: FrameInfo::default(),
             dirty: true,
+            progress_bar: None,
+            scrub: None,
         };
         if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
             app.notify("Spicy Lyrics needs an API key: press o → Providers");
@@ -564,6 +568,20 @@ impl App {
             Event::Mouse(m) if self.cfg.appearance.mouse && matches!(self.overlay, Overlay::None) => match m.kind {
                 MouseEventKind::ScrollDown => self.scroll_by(2.0),
                 MouseEventKind::ScrollUp => self.scroll_by(-2.0),
+                MouseEventKind::Down(MouseButton::Left) => self.on_press(m.column, m.row),
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    if self.scrub.is_some()
+                        && let Some(pos) = self.progress_position(m.column)
+                    {
+                        self.scrub = Some(pos);
+                    }
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    if let Some(pos) = self.scrub.take() {
+                        let _ = self.player_tx.send(PlayerCommand::SetPosition(pos));
+                        self.follow.manual = false;
+                    }
+                }
                 _ => {}
             },
             Event::Resize(..) => {
@@ -828,6 +846,47 @@ impl App {
         let min = -(self.frame.viewport * 0.4).floor();
         self.follow.offset = (self.follow.offset + rows).clamp(min, max);
         self.last_scroll = Instant::now();
+    }
+
+    fn progress_position(&self, column: u16) -> Option<f64> {
+        let (_, x0, width) = self.progress_bar?;
+        let len = self.track.as_ref().and_then(|t| t.length).filter(|l| *l > 0.0)?;
+        let frac = ((column as f64 - x0 as f64 + 0.5) / width.max(1) as f64).clamp(0.0, 1.0);
+        Some(frac * len)
+    }
+
+    fn on_press(&mut self, column: u16, row: u16) {
+        if let Some((y, x0, width)) = self.progress_bar
+            && row == y
+            && column + 1 >= x0
+            && column <= x0 + width
+        {
+            if self.controls_allowed()
+                && let Some(pos) = self.progress_position(column)
+            {
+                self.scrub = Some(pos);
+            }
+            return;
+        }
+        if self.cfg.scroll.click_seek == crate::config::ClickSeek::Off {
+            return;
+        }
+        let Some(hit) = self
+            .frame
+            .hits
+            .iter()
+            .find(|h| h.y == row && column >= h.x0 && column < h.x1)
+            .copied()
+        else {
+            return;
+        };
+        if !self.controls_allowed() {
+            return;
+        }
+        let offset = (self.cfg.sync.offset_ms + self.track_offset_ms()) as f64 / 1000.0;
+        let target = (hit.time - offset - 0.05).max(0.0);
+        let _ = self.player_tx.send(PlayerCommand::SetPosition(target));
+        self.follow.manual = false;
     }
 
     fn controls_allowed(&mut self) -> bool {
