@@ -1,10 +1,11 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::{
-    Alignment, Background, Config, MatchTier, PlayerMode, Renderer, SPICY_KEY_ENV, VisualStyle,
+    Alignment, Background, ClickSeek, Config, MatchTier, PlayerMode, Renderer, SPICY_KEY_ENV, ScrollAnimation,
+    VisualStyle,
 };
 use crate::providers::cache::MAX_TTL_DAYS;
-use crate::providers::{KNOWN_PROVIDERS, ordered_ids, provider_name};
+use crate::providers::{ordered_ids, provider_name};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsAction {
@@ -62,66 +63,126 @@ fn item(label: &str, desc: &str, kind: Kind) -> Item {
     }
 }
 
+fn tolerance_desc() -> &'static str {
+    "How far a search result's length may differ from the playing track and still count as the same recording."
+}
+
+pub fn provider_page(id: &str) -> Vec<Item> {
+    match id {
+        crate::providers::spicy::ID => vec![
+            item(
+                "Enabled",
+                "Use Spicy Lyrics. It returns community syncs first, then Apple Music and Spotify syncs.",
+                Kind::Toggle {
+                    get: |c| c.providers.is_enabled(crate::providers::spicy::ID),
+                    set: |c, v| c.providers.set_enabled(crate::providers::spicy::ID, v),
+                },
+            ),
+            item(
+                "API key",
+                &format!(
+                    "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in ~/.config/lyrminal/config.json. The {SPICY_KEY_ENV} environment variable overrides it."
+                ),
+                Kind::Text {
+                    get: |c| c.providers.spicy_lyrics.api_key.clone(),
+                    set: |c, v| c.providers.spicy_lyrics.api_key = v.trim().to_string(),
+                    secret: true,
+                    placeholder: "sl_sk_…",
+                },
+            ),
+            item(
+                "Auto-match",
+                "When the player gives no Spotify id, the worst search match Spicy Lyrics may pick on its own. A different version of a song has different timings, so exact is safest.",
+                Kind::Choice {
+                    options: &["exact", "likely", "version", "other artist", "related"],
+                    get: |c| MatchTier::ALL.iter().position(|t| *t == c.providers.spicy_lyrics.min_tier).unwrap_or(0),
+                    set: |c, i| c.providers.spicy_lyrics.min_tier = MatchTier::ALL[i.min(4)],
+                },
+            ),
+            item(
+                "Lookups",
+                "By Spotify id when the player exposes one (Spotify, spotifast), otherwise by searching title, artist, album and length.",
+                Kind::Info,
+            ),
+            item(
+                "Credits",
+                "The provider is always shown under the lyrics; community syncs also credit and link the people who made them.",
+                Kind::Info,
+            ),
+        ],
+        crate::providers::lrcred::ID => vec![
+            item(
+                "Enabled",
+                "Use lrc.red: tens of millions of tracks, many word-synced, with duets and background vocals. No key needed.",
+                Kind::Toggle {
+                    get: |c| c.providers.is_enabled(crate::providers::lrcred::ID),
+                    set: |c, v| c.providers.set_enabled(crate::providers::lrcred::ID, v),
+                },
+            ),
+            item(
+                "Duration tolerance",
+                tolerance_desc(),
+                Kind::Number {
+                    min: 0.5,
+                    max: 10.0,
+                    step: 0.5,
+                    decimals: 1,
+                    unit: "s",
+                    get: |c| c.providers.lrc_red.duration_tolerance_secs,
+                    set: |c, v| c.providers.lrc_red.duration_tolerance_secs = v,
+                },
+            ),
+            item(
+                "Lookups",
+                "By ISRC when the player exposes one, otherwise by searching title and artist. Only exact matches are picked automatically.",
+                Kind::Info,
+            ),
+            item("Credits", "lrc.red is credited and linked under the lyrics, as its terms require.", Kind::Info),
+        ],
+        crate::providers::lrclib::ID => vec![
+            item(
+                "Enabled",
+                "Use LRCLIB: a free, open lyrics database with line-synced and some word-synced lyrics. No key needed.",
+                Kind::Toggle {
+                    get: |c| c.providers.is_enabled(crate::providers::lrclib::ID),
+                    set: |c, v| c.providers.set_enabled(crate::providers::lrclib::ID, v),
+                },
+            ),
+            item(
+                "Duration tolerance",
+                tolerance_desc(),
+                Kind::Number {
+                    min: 0.5,
+                    max: 10.0,
+                    step: 0.5,
+                    decimals: 1,
+                    unit: "s",
+                    get: |c| c.providers.lrclib.duration_tolerance_secs,
+                    set: |c, v| c.providers.lrclib.duration_tolerance_secs = v,
+                },
+            ),
+            item(
+                "Lookups",
+                "By title, artist, album and length, falling back to a search. Requests are spaced out to respect LRCLIB's limits.",
+                Kind::Info,
+            ),
+        ],
+        _ => Vec::new(),
+    }
+}
+
 pub fn sections(cfg: &Config) -> Vec<Section> {
-    let mut providers: Vec<Item> = ordered_ids(cfg)
+    let providers: Vec<Item> = ordered_ids(cfg)
         .into_iter()
         .map(|id| {
-            let needs_key = KNOWN_PROVIDERS.iter().any(|p| p.id == id && p.needs_key);
             let name = provider_name(&id).to_string();
             item(
                 &name,
-                &format!(
-                    "Space toggles this provider. Shift+↑/↓ or K/J changes its priority; lyrics come from the first provider that has them.{}",
-                    if needs_key { " Needs an API key (below)." } else { "" }
-                ),
+                "Enter opens this provider's settings. Space turns it on or off. Shift+↑/↓ or K/J changes its priority: lyrics come from the first provider that has them.",
                 Kind::Provider(id),
             )
         })
         .collect();
-    providers.extend([
-        item(
-            "Spicy Lyrics API key",
-            &format!(
-                "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in ~/.config/lyrminal/config.json. The {SPICY_KEY_ENV} environment variable overrides it."
-            ),
-            Kind::Text {
-                get: |c| c.providers.spicy_lyrics.api_key.clone(),
-                set: |c, v| c.providers.spicy_lyrics.api_key = v.trim().to_string(),
-                secret: true,
-                placeholder: "sl_sk_…",
-            },
-        ),
-        item(
-            "Spicy Lyrics auto-match",
-            "When the player gives no Spotify id, the worst search match Spicy Lyrics may pick on its own. A different version of a song has different timings, so exact is safest.",
-            Kind::Choice {
-                options: &["exact", "likely", "version", "other artist", "related"],
-                get: |c| MatchTier::ALL.iter().position(|t| *t == c.providers.spicy_lyrics.min_tier).unwrap_or(0),
-                set: |c, i| c.providers.spicy_lyrics.min_tier = MatchTier::ALL[i.min(4)],
-            },
-        ),
-        item(
-            "Duration tolerance",
-            "How far a search result's length may differ from the playing track and still count as the same recording.",
-            Kind::Number {
-                min: 0.5,
-                max: 10.0,
-                step: 0.5,
-                decimals: 1,
-                unit: "s",
-                get: |c| c.providers.duration_tolerance_secs,
-                set: |c, v| c.providers.duration_tolerance_secs = v,
-            },
-        ),
-        item(
-            "Prefer synced lyrics",
-            "If a higher-priority provider only has unsynced lyrics, keep asking the next ones for a synced version.",
-            Kind::Toggle {
-                get: |c| c.providers.prefer_synced,
-                set: |c, v| c.providers.prefer_synced = v,
-            },
-        ),
-    ]);
 
     vec![
         Section {
@@ -395,9 +456,83 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                         set: |c, v| c.appearance.font_scale = v as f32,
                     },
                 ),
+            ],
+        },
+        Section {
+            title: "Scrolling",
+            items: vec![
                 item(
-                    "Mouse wheel",
-                    "Scroll the lyrics with the mouse wheel. Turn off to keep the terminal's own text selection.",
+                    "Animation",
+                    "Staggered: each line follows the one above it with a short delay, rippling down the screen. Smooth: the whole page glides as one.",
+                    Kind::Choice {
+                        options: &["staggered", "smooth"],
+                        get: |c| (c.scroll.animation == ScrollAnimation::Smooth) as usize,
+                        set: |c, i| {
+                            c.scroll.animation = if i == 1 { ScrollAnimation::Smooth } else { ScrollAnimation::Staggered }
+                        },
+                    },
+                ),
+                item(
+                    "Speed",
+                    "How fast the lyrics scroll to the next line. Higher is faster.",
+                    Kind::Number {
+                        min: 0.25,
+                        max: 3.0,
+                        step: 0.05,
+                        decimals: 2,
+                        unit: "×",
+                        get: |c| c.scroll.speed,
+                        set: |c, v| c.scroll.speed = v,
+                    },
+                ),
+                item(
+                    "Scroll ahead",
+                    "Start moving to the next line this long before it is sung, so it is in place when it begins.",
+                    Kind::Number {
+                        min: 0.0,
+                        max: 1500.0,
+                        step: 50.0,
+                        decimals: 0,
+                        unit: "ms",
+                        get: |c| c.scroll.lead_ms as f64,
+                        set: |c, v| c.scroll.lead_ms = v as u32,
+                    },
+                ),
+                item(
+                    "Click to seek",
+                    "Clicking the lyrics jumps the song there: to the start of the line, or to the clicked word when the sync has word timings. Needs playback controls and mouse input.",
+                    Kind::Choice {
+                        options: &["off", "lines", "words"],
+                        get: |c| match c.scroll.click_seek {
+                            ClickSeek::Off => 0,
+                            ClickSeek::Lines => 1,
+                            ClickSeek::Words => 2,
+                        },
+                        set: |c, i| {
+                            c.scroll.click_seek = match i {
+                                0 => ClickSeek::Off,
+                                1 => ClickSeek::Lines,
+                                _ => ClickSeek::Words,
+                            }
+                        },
+                    },
+                ),
+                item(
+                    "Resume following after",
+                    "Seconds after you stop scrolling before the lyrics follow the song again.",
+                    Kind::Number {
+                        min: 1.0,
+                        max: 60.0,
+                        step: 1.0,
+                        decimals: 0,
+                        unit: "s",
+                        get: |c| c.lyrics.resume_follow_secs,
+                        set: |c, v| c.lyrics.resume_follow_secs = v,
+                    },
+                ),
+                item(
+                    "Mouse",
+                    "Mouse wheel scrolling and clicking on the lyrics and progress bar. Turn off to keep the terminal's own text selection.",
                     Kind::Toggle {
                         get: |c| c.appearance.mouse,
                         set: |c, v| c.appearance.mouse = v,
@@ -408,6 +543,14 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
         Section {
             title: "Lyrics",
             items: vec![
+                item(
+                    "Prefer synced lyrics",
+                    "If a higher-priority provider only has unsynced lyrics, keep asking the next ones for a synced version.",
+                    Kind::Toggle {
+                        get: |c| c.providers.prefer_synced,
+                        set: |c, v| c.providers.prefer_synced = v,
+                    },
+                ),
                 item(
                     "Romanization",
                     "Show a romanized line under lyrics that have one.",
@@ -459,19 +602,6 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     Kind::Toggle {
                         get: |c| c.lyrics.join_split_words,
                         set: |c, v| c.lyrics.join_split_words = v,
-                    },
-                ),
-                item(
-                    "Resume following after",
-                    "Seconds after you stop scrolling before the lyrics follow the song again.",
-                    Kind::Number {
-                        min: 1.0,
-                        max: 60.0,
-                        step: 1.0,
-                        decimals: 0,
-                        unit: "s",
-                        get: |c| c.lyrics.resume_follow_secs,
-                        set: |c, v| c.lyrics.resume_follow_secs = v,
                     },
                 ),
             ],
@@ -644,6 +774,7 @@ pub fn value_text(cfg: &Config, kind: &Kind) -> String {
 pub struct SettingsState {
     pub section: usize,
     pub item: usize,
+    pub page: Option<String>,
     pub editing: Option<String>,
     pub confirm: Option<SettingsAction>,
 }
@@ -653,8 +784,20 @@ impl SettingsState {
         Self {
             section: 0,
             item: 0,
+            page: None,
             editing: None,
             confirm: None,
+        }
+    }
+
+    pub fn items(&self, cfg: &Config) -> Vec<Item> {
+        match &self.page {
+            Some(id) => provider_page(id),
+            None => {
+                let mut secs = sections(cfg);
+                let i = self.section.min(secs.len() - 1);
+                secs.swap_remove(i).items
+            }
         }
     }
 }
@@ -680,7 +823,7 @@ fn move_provider(cfg: &mut Config, id: &str, delta: i32) {
 pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) -> SettingsOutcome {
     let secs = sections(cfg);
     state.section = state.section.min(secs.len() - 1);
-    let items = &secs[state.section].items;
+    let items = state.items(cfg);
     state.item = state.item.min(items.len().saturating_sub(1));
     let current = &items[state.item];
 
@@ -721,15 +864,35 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
     }
 
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let leave_page = |state: &mut SettingsState, cfg: &Config| {
+        if let Some(id) = state.page.take() {
+            state.item = ordered_ids(cfg).iter().position(|p| *p == id).unwrap_or(0);
+        }
+    };
     match key.code {
+        KeyCode::Esc if state.page.is_some() => leave_page(state, cfg),
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => return SettingsOutcome::Close,
         KeyCode::Tab => {
+            state.page = None;
             state.section = (state.section + 1) % secs.len();
             state.item = 0;
         }
         KeyCode::BackTab => {
+            state.page = None;
             state.section = (state.section + secs.len() - 1) % secs.len();
             state.item = 0;
+        }
+        KeyCode::Right | KeyCode::Char('l') if matches!(current.kind, Kind::Provider(_)) => {
+            if let Kind::Provider(id) = &current.kind {
+                state.page = Some(id.clone());
+                state.item = 0;
+            }
+        }
+        KeyCode::Left | KeyCode::Char('h')
+            if state.page.is_some()
+                && !matches!(current.kind, Kind::Choice { .. } | Kind::Number { .. } | Kind::Toggle { .. }) =>
+        {
+            leave_page(state, cfg)
         }
         KeyCode::Up | KeyCode::Down | KeyCode::Char('K') | KeyCode::Char('J')
             if (shift || matches!(key.code, KeyCode::Char('K') | KeyCode::Char('J')))
@@ -791,9 +954,14 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
                 state.editing = Some(if *secret { String::new() } else { get(cfg) });
             }
             Kind::Provider(id) => {
-                let on = cfg.providers.is_enabled(id);
-                cfg.providers.set_enabled(id, !on);
-                return SettingsOutcome::Changed;
+                if key.code == KeyCode::Enter {
+                    state.page = Some(id.clone());
+                    state.item = 0;
+                } else {
+                    let on = cfg.providers.is_enabled(id);
+                    cfg.providers.set_enabled(id, !on);
+                    return SettingsOutcome::Changed;
+                }
             }
             Kind::Action(a) => match a {
                 SettingsAction::PickPlayer => return SettingsOutcome::Action(*a),
@@ -845,17 +1013,43 @@ mod tests {
     }
 
     #[test]
-    fn edits_secret_text() {
+    fn providers_tab_lists_only_providers() {
+        let cfg = Config::default();
+        let items = &sections(&cfg)[0].items;
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|i| matches!(i.kind, Kind::Provider(_))));
+    }
+
+    #[test]
+    fn edits_secret_text_in_provider_page() {
         let mut cfg = Config::default();
         let mut st = SettingsState::new();
-        st.item = 3;
+        handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(st.page.as_deref(), Some("spicy-lyrics"));
+        st.item = 1;
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         paste(&mut st, "sl_sk_abcd1234\n");
         let out = handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(out, SettingsOutcome::Changed));
         assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_abcd1234");
-        let shown = value_text(&cfg, &sections(&cfg)[0].items[3].kind);
+        let shown = value_text(&cfg, &provider_page("spicy-lyrics")[1].kind);
         assert!(shown.ends_with("1234") && !shown.contains("abcd"));
+        handle_key(&mut st, &mut cfg, key(KeyCode::Esc, KeyModifiers::NONE));
+        assert!(st.page.is_none());
+        assert_eq!(st.item, 0);
+    }
+
+    #[test]
+    fn provider_pages_have_their_own_tolerance() {
+        let mut cfg = Config::default();
+        let mut st = SettingsState::new();
+        st.item = 1;
+        handle_key(&mut st, &mut cfg, key(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert_eq!(st.page.as_deref(), Some("lrc-red"));
+        st.item = 1;
+        handle_key(&mut st, &mut cfg, key(KeyCode::Right, KeyModifiers::NONE));
+        assert_eq!(cfg.providers.lrc_red.duration_tolerance_secs, 2.5);
+        assert_eq!(cfg.providers.lrclib.duration_tolerance_secs, 2.0);
     }
 
     #[test]
@@ -863,7 +1057,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.cache.ttl_days = 30;
         let mut st = SettingsState::new();
-        st.section = 6;
+        st.section = sections(&cfg).iter().position(|s| s.title == "Cache").unwrap();
         st.item = 1;
         handle_key(&mut st, &mut cfg, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(cfg.cache.ttl_days, 30);
