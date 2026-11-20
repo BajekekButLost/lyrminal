@@ -273,7 +273,7 @@ impl Default for AppearanceConfig {
             font_family: String::new(),
             font_weight: 700,
             font_scale: 2.2,
-            glow: true,
+            glow: false,
             emphasis: true,
             mouse: true,
         }
