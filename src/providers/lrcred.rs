@@ -96,6 +96,7 @@ impl LrcRed {
             provider: NAME.into(),
             provider_url: Some(format!("{BASE}/s/{isrc}")),
             source: None,
+            source_tag: None,
             songwriters: Vec::new(),
             contributors: Vec::new(),
         };
