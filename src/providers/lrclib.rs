@@ -1,7 +1,13 @@
 use futures::future::BoxFuture;
 use serde::Deserialize;
 
-use super::{Candidate, LyricsProvider, ProviderError, ProviderResult, TrackQuery, clean_title, rate_tier, retry_after};
+use std::sync::Arc;
+use std::time::Duration;
+
+use super::{
+    Candidate, LyricsProvider, ProviderError, ProviderResult, RateGate, TrackQuery, clean_title, gate_for, rate_tier,
+    retry_after,
+};
 use crate::config::MatchTier;
 use crate::lyrics::{Credits, LyricLine, Lyrics, Syllable, SyncKind, VocalGroup, lrc};
 
@@ -12,6 +18,7 @@ const BASE: &str = "https://lrclib.net";
 pub struct Lrclib {
     client: reqwest::Client,
     tolerance: f64,
+    gate: Arc<RateGate>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,17 +89,27 @@ struct LfWord {
 
 impl Lrclib {
     pub fn new(client: reqwest::Client, tolerance: f64) -> Self {
-        Self { client, tolerance }
+        Self {
+            client,
+            tolerance,
+            gate: gate_for(ID, Duration::from_millis(350)),
+        }
     }
 
     async fn request<T: serde::de::DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> ProviderResult<T> {
+        self.gate.acquire().await?;
+        let result = self.send(path, query).await;
+        self.gate.observe(result).await
+    }
+
+    async fn send<T: serde::de::DeserializeOwned>(&self, path: &str, query: &[(&str, String)]) -> ProviderResult<T> {
         let resp = self.client.get(format!("{BASE}{path}")).query(query).send().await?;
         let status = resp.status().as_u16();
         match status {
             200 => resp.json::<T>().await.map_err(Into::into),
             404 => Err(ProviderError::NotFound),
             429 => Err(ProviderError::RateLimited(retry_after(&resp))),
-            503 => Err(ProviderError::Unavailable("server overloaded".into())),
+            503 => Err(ProviderError::Unavailable("server overloaded".into(), retry_after(&resp))),
             _ => Err(ProviderError::Http(status, resp.text().await.unwrap_or_default())),
         }
     }
@@ -139,6 +156,7 @@ impl Lrclib {
 fn credits() -> Credits {
     Credits {
         provider: NAME.into(),
+        provider_url: Some("https://lrclib.net".into()),
         source: None,
         songwriters: Vec::new(),
         contributors: Vec::new(),

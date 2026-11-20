@@ -1,7 +1,10 @@
 use futures::future::BoxFuture;
 use serde::Deserialize;
 
-use super::{Candidate, LyricsProvider, ProviderError, ProviderResult, TrackQuery, retry_after};
+use std::sync::Arc;
+use std::time::Duration;
+
+use super::{Candidate, LyricsProvider, ProviderError, ProviderResult, RateGate, TrackQuery, gate_for, retry_after};
 use crate::config::MatchTier;
 use crate::lyrics::{Contributor, Credits, LyricLine, Lyrics, Syllable, SyncKind, VocalGroup};
 
@@ -13,11 +16,17 @@ pub struct SpicyLyrics {
     client: reqwest::Client,
     key: Option<String>,
     min_tier: MatchTier,
+    gate: Arc<RateGate>,
 }
 
 impl SpicyLyrics {
     pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier) -> Self {
-        Self { client, key, min_tier }
+        Self {
+            client,
+            key,
+            min_tier,
+            gate: gate_for(ID, Duration::from_millis(250)),
+        }
     }
 
     fn key(&self) -> ProviderResult<&str> {
@@ -28,6 +37,12 @@ impl SpicyLyrics {
 
     async fn get_json(&self, url: &str, query: &[(&str, String)]) -> ProviderResult<serde_json::Value> {
         let key = self.key()?;
+        self.gate.acquire().await?;
+        let result = self.send(key, url, query).await;
+        self.gate.observe(result).await
+    }
+
+    async fn send(&self, key: &str, url: &str, query: &[(&str, String)]) -> ProviderResult<serde_json::Value> {
         let resp = self
             .client
             .get(url)
@@ -46,7 +61,7 @@ impl SpicyLyrics {
         Err(match status {
             404 => ProviderError::NotFound,
             429 => ProviderError::RateLimited(retry),
-            503 => ProviderError::Unavailable(if message.is_empty() { code } else { message }),
+            503 => ProviderError::Unavailable(if message.is_empty() { code } else { message }, retry),
             401 | 403 => ProviderError::NotConfigured(if message.is_empty() { code } else { message }),
             _ => ProviderError::Http(status, if message.is_empty() { code } else { message }),
         })
@@ -324,12 +339,12 @@ struct Syl {
     transliterated_is_part_of_word: bool,
 }
 
-fn source_label(source: Option<&str>) -> Option<String> {
-    match source? {
-        "spicy_lyrics" => Some("Community sync".into()),
-        "apple_music" => Some("Apple Music".into()),
-        "spotify" => Some("Spotify".into()),
-        _ => None,
+fn source_label(source: Option<&str>) -> String {
+    match source {
+        Some("spicy_lyrics") => "Spicy Lyrics community sync".into(),
+        Some("apple_music") => "Apple Music".into(),
+        Some("spotify") => "Spotify".into(),
+        _ => "Unknown source".into(),
     }
 }
 
@@ -388,7 +403,8 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
     }
     let credits = Credits {
         provider: NAME.into(),
-        source: source_label(body.source.as_deref()),
+        provider_url: Some("https://spicylyrics.org".into()),
+        source: Some(source_label(body.source.as_deref())),
         songwriters: body.song_writers,
         contributors,
     };
@@ -517,5 +533,12 @@ mod tests {
         let l = convert(body).unwrap();
         assert!(l.credits.contributors.is_empty());
         assert_eq!(l.credits.source.as_deref(), Some("Spotify"));
+    }
+
+    #[test]
+    fn labels_unknown_source() {
+        let json = serde_json::json!({"Type": "Static", "Lines": [{"Text": "a"}], "id": "x", "ids": {"spotify": "x"}, "source": "unknown"});
+        let body: Body = serde_json::from_value(json).unwrap();
+        assert_eq!(convert(body).unwrap().credits.source.as_deref(), Some("Unknown source"));
     }
 }
