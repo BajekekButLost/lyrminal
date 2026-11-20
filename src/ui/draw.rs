@@ -593,7 +593,7 @@ fn draw_settings(f: &mut Frame, app: &App) {
     let desc_text = if let Some(a) = state.confirm {
         let what = match a {
             settings::SettingsAction::ClearCache => "clear the lyrics cache",
-            settings::SettingsAction::ResetDefaults => "reset every setting",
+            settings::SettingsAction::ResetDefaults => "reset every setting and API key",
             settings::SettingsAction::PickPlayer => "pick a player",
         };
         format!("Press y to {what}, any other key to cancel.")

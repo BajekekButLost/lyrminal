@@ -720,11 +720,9 @@ impl App {
             }
             SettingsAction::ResetDefaults => {
                 let old = self.cfg.clone();
-                let key = self.cfg.providers.spicy_lyrics.api_key.clone();
                 self.cfg = Config::default();
-                self.cfg.providers.spicy_lyrics.api_key = key;
                 self.apply_config(&old);
-                self.notify("Settings reset to defaults");
+                self.notify("Settings and API keys reset to defaults");
             }
         }
     }
