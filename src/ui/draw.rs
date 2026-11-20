@@ -481,7 +481,7 @@ fn draw_settings(f: &mut Frame, app: &App) {
     let (inner, bg) = modal(f, theme, "Settings", 96.min(area.width), area.height.saturating_sub(4).max(16));
     let secs = settings::sections(&app.cfg);
     let section = state.section.min(secs.len() - 1);
-    let items = &secs[section].items;
+    let items = state.items(&app.cfg);
     let selected = state.item.min(items.len().saturating_sub(1));
     let [nav, body] = Layout::horizontal([Constraint::Length(16), Constraint::Min(20)]).areas(inner);
     let nav_lines: Vec<Line> = secs
@@ -500,8 +500,25 @@ fn draw_settings(f: &mut Frame, app: &App) {
         .collect();
     f.render_widget(Paragraph::new(nav_lines), nav);
 
-    let [list, desc, footer] =
-        Layout::vertical([Constraint::Min(4), Constraint::Length(4), Constraint::Length(1)]).areas(body);
+    let [crumb, list, desc, footer] = Layout::vertical([
+        Constraint::Length(if state.page.is_some() { 2 } else { 0 }),
+        Constraint::Min(4),
+        Constraint::Length(4),
+        Constraint::Length(1),
+    ])
+    .areas(body);
+    if let Some(id) = &state.page {
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("‹ Providers / ", panel_ink(theme, bg, 0.5)),
+                Span::styled(
+                    provider_name(id).to_string(),
+                    Style::default().fg(theme.accent.to_color()).bg(bg.to_color()).add_modifier(Modifier::BOLD),
+                ),
+            ])),
+            crumb,
+        );
+    }
     let label_w = 30usize;
     let visible = list.height as usize;
     let scroll = selected.saturating_sub(visible.saturating_sub(2));
@@ -561,11 +578,14 @@ fn draw_settings(f: &mut Frame, app: &App) {
             .wrap(Wrap { trim: true }),
         desc,
     );
-    f.render_widget(
-        Paragraph::new("Tab section · ↑↓ move · ←→ change · ↵ edit · K/J reorder · Esc close")
-            .style(panel_ink(theme, bg, 0.4)),
-        footer,
-    );
+    let hint = if state.page.is_some() {
+        "↑↓ move · ←→ change · ↵ edit · Esc back"
+    } else if section == 0 {
+        "↵ configure · Space on/off · K/J reorder · Tab section · Esc close"
+    } else {
+        "Tab section · ↑↓ move · ←→ change · ↵ edit · Esc close"
+    };
+    f.render_widget(Paragraph::new(hint).style(panel_ink(theme, bg, 0.4)), footer);
 }
 
 fn draw_players(f: &mut Frame, app: &App) {
