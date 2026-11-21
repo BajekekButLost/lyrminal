@@ -102,6 +102,14 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::local::ID, v),
                 },
             ),
+            item(
+                "Prioritize local library",
+                "When a saved sync clearly matches the playing song, use it over the providers below the local library in the priority list, even if they have a better sync. Providers above it still win when they have a better sync.",
+                Kind::Toggle {
+                    get: |c| c.providers.local_library.prioritize,
+                    set: |c, v| c.providers.local_library.prioritize = v,
+                },
+            ),
             default_library_item(),
             item(
                 "Duration tolerance",
@@ -622,7 +630,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
             items: vec![
                 item(
                     "Prefer synced lyrics",
-                    "If a higher-priority provider only has unsynced lyrics, keep asking the next ones for a synced version.",
+                    "Ask the providers for the best sync: word sync beats line sync, which beats unsynced lyrics. When several have the same kind, the priority order decides. Off: use the first provider that has any lyrics.",
                     Kind::Toggle {
                         get: |c| c.providers.prefer_synced,
                         set: |c, v| c.providers.prefer_synced = v,
@@ -1196,8 +1204,7 @@ mod tests {
         let mut st = SettingsState::new();
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some(crate::providers::local::ID));
-        st.item = 1;
-        assert_eq!(st.items(&cfg)[1].label, DEFAULT_LIBRARY_LABEL);
+        st.item = st.items(&cfg).iter().position(|i| i.label == DEFAULT_LIBRARY_LABEL).unwrap();
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         paste(&mut st, &format!("{}/my", dir.display()));
         handle_key(&mut st, &mut cfg, key(KeyCode::Tab, KeyModifiers::NONE));
