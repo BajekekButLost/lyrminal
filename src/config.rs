@@ -368,6 +368,70 @@ impl Default for CacheConfig {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preset {
+    SpicyLyrics,
+    Lyrminal,
+}
+
+impl Preset {
+    pub const ALL: [Preset; 2] = [Preset::SpicyLyrics, Preset::Lyrminal];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Preset::SpicyLyrics => "Spicy Lyrics",
+            Preset::Lyrminal => "Lyrminal",
+        }
+    }
+
+    pub fn apply(self, cfg: &mut Config) {
+        let d = Config::default();
+        let a = &mut cfg.appearance;
+        a.style = VisualStyle::Spring;
+        a.album_theming = true;
+        a.background = Background::Gradient;
+        a.album_art = true;
+        a.show_header = true;
+        a.alignment = Alignment::Left;
+        a.line_gap = d.appearance.line_gap;
+        a.depth_dimming = true;
+        a.fade_previous = false;
+        a.contrast = d.appearance.contrast;
+        a.font_weight = 700;
+        a.font_scale = d.appearance.font_scale;
+        a.glow = false;
+        a.emphasis = true;
+        cfg.scroll.speed = d.scroll.speed;
+        cfg.lyrics.background_vocals = true;
+        cfg.lyrics.interludes = true;
+        cfg.lyrics.interlude_threshold_secs = d.lyrics.interlude_threshold_secs;
+        cfg.lyrics.join_split_words = false;
+        match self {
+            Preset::SpicyLyrics => {
+                cfg.appearance.renderer = Renderer::Pixel;
+                cfg.appearance.syllable_spacing = SyllableSpacing::Separate;
+                cfg.scroll.animation = ScrollAnimation::Smooth;
+                cfg.scroll.lead_ms = 0;
+            }
+            Preset::Lyrminal => {
+                cfg.appearance.renderer = d.appearance.renderer;
+                cfg.appearance.syllable_spacing = d.appearance.syllable_spacing;
+                cfg.scroll.animation = d.scroll.animation;
+                cfg.scroll.lead_ms = d.scroll.lead_ms;
+            }
+        }
+    }
+
+    pub fn detect(cfg: &Config) -> Option<Preset> {
+        let current = serde_json::to_value(cfg).ok()?;
+        Preset::ALL.into_iter().find(|p| {
+            let mut c = cfg.clone();
+            p.apply(&mut c);
+            serde_json::to_value(&c).ok().as_ref() == Some(&current)
+        })
+    }
+}
+
 pub fn config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -430,3 +494,31 @@ fn restrict_permissions(path: &std::path::Path) {
 
 #[cfg(not(unix))]
 fn restrict_permissions(_path: &std::path::Path) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn defaults_match_the_lyrminal_preset() {
+        assert_eq!(Preset::detect(&Config::default()), Some(Preset::Lyrminal));
+    }
+
+    #[test]
+    fn presets_apply_and_are_detected() {
+        let mut cfg = Config::default();
+        cfg.providers.spicy_lyrics.api_key = "sl_sk_kept".into();
+        cfg.sync.offset_ms = 120;
+        Preset::SpicyLyrics.apply(&mut cfg);
+        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
+        assert_eq!(cfg.appearance.renderer, Renderer::Pixel);
+        assert_eq!(cfg.appearance.syllable_spacing, SyllableSpacing::Separate);
+        assert_eq!(cfg.scroll.animation, ScrollAnimation::Smooth);
+        assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_kept");
+        assert_eq!(cfg.sync.offset_ms, 120);
+        cfg.appearance.style = VisualStyle::Bloom;
+        assert_eq!(Preset::detect(&cfg), None);
+        Preset::Lyrminal.apply(&mut cfg);
+        assert_eq!(Preset::detect(&cfg), Some(Preset::Lyrminal));
+    }
+}
