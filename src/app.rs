@@ -86,6 +86,22 @@ impl SyncPicker {
         }
         rows
     }
+
+    pub fn group_starts(rows: &[SyncRow]) -> Vec<usize> {
+        let mut starts = Vec::new();
+        let mut open = true;
+        for (i, row) in rows.iter().enumerate() {
+            match row {
+                SyncRow::Header { .. } => open = true,
+                _ if open => {
+                    starts.push(i);
+                    open = false;
+                }
+                _ => {}
+            }
+        }
+        starts
+    }
 }
 
 pub enum Overlay {
@@ -728,6 +744,12 @@ impl App {
                                 picker.selected = i;
                                 break;
                             }
+                        }
+                    }
+                    KeyCode::Tab | KeyCode::BackTab => {
+                        let dir = if key.code == KeyCode::Tab { 1 } else { -1 };
+                        if let Some(i) = crate::ui::jump_group(&SyncPicker::group_starts(&rows), picker.selected, dir) {
+                            picker.selected = i;
                         }
                     }
                     KeyCode::Char('r') => self.open_syncs(),

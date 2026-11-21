@@ -859,7 +859,7 @@ fn draw_syncs(f: &mut Frame, app: &App, hits: &mut UiHits) {
     f.render_widget(
         Paragraph::new(vec![
             Line::from(Span::styled(status, panel_ink(theme, bg, 0.7))),
-            Line::from(Span::styled("Enter or click twice to use this sync · r search again · Esc close", panel_ink(theme, bg, 0.4))),
+            Line::from(Span::styled("Enter or click twice to use this sync · Tab next provider · r search again · Esc close", panel_ink(theme, bg, 0.4))),
         ]),
         footer,
     );
