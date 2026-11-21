@@ -120,6 +120,7 @@ pub struct ProvidersConfig {
     pub spicy_lyrics: SpicyConfig,
     pub lrc_red: SearchProviderConfig,
     pub unison: SearchProviderConfig,
+    pub lrcmux: SearchProviderConfig,
     pub lrclib: SearchProviderConfig,
     pub prefer_synced: bool,
 }
@@ -132,6 +133,7 @@ impl Default for ProvidersConfig {
                 "spicy-lyrics".into(),
                 "lrc-red".into(),
                 "unison".into(),
+                "lrcmux".into(),
                 "lrclib".into(),
             ],
             disabled: Vec::new(),
@@ -139,6 +141,7 @@ impl Default for ProvidersConfig {
             spicy_lyrics: SpicyConfig::default(),
             lrc_red: SearchProviderConfig::default(),
             unison: SearchProviderConfig::default(),
+            lrcmux: SearchProviderConfig::default(),
             lrclib: SearchProviderConfig::default(),
             prefer_synced: true,
         }

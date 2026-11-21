@@ -242,6 +242,39 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                 Kind::Info,
             ),
         ],
+        crate::providers::lrcmux::ID => vec![
+            item(
+                "Enabled",
+                "Use lrcmux: a free lyrics API that gathers word- and line-synced lyrics from Deezer, KuGou and YouTube Music. No key needed.",
+                Kind::Toggle {
+                    get: |c| c.providers.is_enabled(crate::providers::lrcmux::ID),
+                    set: |c, v| c.providers.set_enabled(crate::providers::lrcmux::ID, v),
+                },
+            ),
+            item(
+                "Duration tolerance",
+                tolerance_desc(),
+                Kind::Number {
+                    min: 0.5,
+                    max: 10.0,
+                    step: 0.5,
+                    decimals: 1,
+                    unit: "s",
+                    get: |c| c.providers.lrcmux.duration_tolerance_secs,
+                    set: |c, v| c.providers.lrcmux.duration_tolerance_secs = v,
+                },
+            ),
+            item(
+                "Lookups",
+                "By searching title, artist, album and length; lrcmux picks the best sync among its sources. Choosing a sync lists one result per source.",
+                Kind::Info,
+            ),
+            item(
+                "Credits",
+                "The source lrcmux got the lyrics from, such as Deezer, is shown in the track header next to lrcmux.",
+                Kind::Info,
+            ),
+        ],
         crate::providers::lrclib::ID => vec![
             item(
                 "Enabled",
@@ -826,7 +859,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                 ),
                 item(
                     "Unofficial",
-                    "Lyrminal is an unofficial app. It is not made, endorsed or supported by Spicy Lyrics, lrc.red, Better Lyrics (Unison) or LRCLIB; it uses their public APIs.",
+                    "Lyrminal is an unofficial app. It is not made, endorsed or supported by Spicy Lyrics, lrc.red, Better Lyrics (Unison), lrcmux or LRCLIB; it uses their public APIs.",
                     Kind::Info,
                 ),
                 item(
@@ -1204,10 +1237,13 @@ mod tests {
     fn reorders_providers() {
         let mut cfg = Config::default();
         let mut st = SettingsState::new();
-        st.item = 4;
+        st.item = 5;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('K'), KeyModifiers::SHIFT));
-        assert_eq!(ordered_ids(&cfg), vec!["local-library", "spicy-lyrics", "lrc-red", "lrclib", "unison"]);
-        assert_eq!(st.item, 3);
+        assert_eq!(
+            ordered_ids(&cfg),
+            vec!["local-library", "spicy-lyrics", "lrc-red", "unison", "lrclib", "lrcmux"]
+        );
+        assert_eq!(st.item, 4);
         handle_key(&mut st, &mut cfg, key(KeyCode::Char(' '), KeyModifiers::NONE));
         assert!(!cfg.providers.is_enabled("lrclib"));
     }
@@ -1216,7 +1252,7 @@ mod tests {
     fn providers_tab_lists_only_providers() {
         let cfg = Config::default();
         let items = &sections(&cfg)[0].items;
-        assert_eq!(items.len(), 5);
+        assert_eq!(items.len(), 6);
         assert!(items.iter().all(|i| matches!(i.kind, Kind::Provider(_))));
         assert!(matches!(&items[0].kind, Kind::Provider(id) if id == crate::providers::local::ID));
     }
@@ -1225,11 +1261,25 @@ mod tests {
     fn adds_new_providers_at_their_default_position() {
         let mut cfg = Config::default();
         cfg.providers.order = vec!["lrclib".into(), "spicy-lyrics".into(), "lrc-red".into()];
-        assert_eq!(ordered_ids(&cfg), vec!["local-library", "lrclib", "spicy-lyrics", "unison", "lrc-red"]);
+        assert_eq!(
+            ordered_ids(&cfg),
+            vec!["local-library", "lrclib", "spicy-lyrics", "unison", "lrcmux", "lrc-red"]
+        );
         cfg.providers.order = vec!["local-library".into(), "spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()];
         assert_eq!(
             ordered_ids(&cfg),
-            vec!["local-library", "spicy-lyrics", "lrc-red", "unison", "lrclib"]
+            vec!["local-library", "spicy-lyrics", "lrc-red", "unison", "lrcmux", "lrclib"]
+        );
+        cfg.providers.order = vec![
+            "local-library".into(),
+            "spicy-lyrics".into(),
+            "lrc-red".into(),
+            "unison".into(),
+            "lrclib".into(),
+        ];
+        assert_eq!(
+            ordered_ids(&cfg),
+            vec!["local-library", "spicy-lyrics", "lrc-red", "unison", "lrcmux", "lrclib"]
         );
     }
 

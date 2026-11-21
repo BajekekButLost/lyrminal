@@ -276,7 +276,7 @@ fn joined_row(segments: &[(String, Option<String>)], kind: RowKind, align: Align
 }
 
 pub fn provider_in_header(credits: &Credits) -> bool {
-    credits.provider == crate::providers::spicy::NAME
+    credits.provider == crate::providers::spicy::NAME || credits.provider == crate::providers::lrcmux::NAME
 }
 
 pub fn text_rows(text: &str, width: u16, kind: RowKind, align: Align, link: Option<String>) -> Vec<Row> {
@@ -618,6 +618,23 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(row_text(&rows[0]), "Lyrics provided by lrc.red");
         assert_eq!(rows[0].links[0].url, "https://lrc.red");
+    }
+
+    #[test]
+    fn lrcmux_source_moves_to_the_header() {
+        let credits = Credits {
+            provider: crate::providers::lrcmux::NAME.into(),
+            provider_url: Some(crate::providers::lrcmux::URL.into()),
+            source: Some("Deezer".into()),
+            source_tag: Some("Deezer".into()),
+            ..Default::default()
+        };
+        assert!(provider_in_header(&credits));
+        assert!(credit_rows(&credits, 60, Align::Left, true).is_empty());
+        let rows = credit_rows(&credits, 60, Align::Left, false);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(row_text(&rows[0]), "Lyrics provided by lrcmux · Deezer");
+        assert_eq!(rows[0].links[0].url, crate::providers::lrcmux::URL);
     }
 
     #[test]

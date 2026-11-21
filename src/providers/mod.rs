@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod local;
 pub mod lrclib;
+pub mod lrcmux;
 pub mod lrcred;
 pub mod resolve;
 pub mod spicy;
@@ -256,6 +257,10 @@ pub const KNOWN_PROVIDERS: &[ProviderInfo] = &[
         name: unison::NAME,
     },
     ProviderInfo {
+        id: lrcmux::ID,
+        name: lrcmux::NAME,
+    },
+    ProviderInfo {
         id: lrclib::ID,
         name: lrclib::NAME,
     },
@@ -341,6 +346,10 @@ impl Registry {
                 unison::ID => providers.push(Arc::new(unison::Unison::new(
                     client.clone(),
                     config.providers.unison.duration_tolerance_secs,
+                ))),
+                lrcmux::ID => providers.push(Arc::new(lrcmux::Lrcmux::new(
+                    client.clone(),
+                    config.providers.lrcmux.duration_tolerance_secs,
                 ))),
                 lrclib::ID => providers.push(Arc::new(lrclib::Lrclib::new(
                     client.clone(),
@@ -428,6 +437,7 @@ mod tests {
         let providers: Vec<Box<dyn LyricsProvider>> = vec![
             Box::new(lrcred::LrcRed::new(client.clone(), 2.0)),
             Box::new(unison::Unison::new(client.clone(), 2.0)),
+            Box::new(lrcmux::Lrcmux::new(client.clone(), 2.0)),
             Box::new(lrclib::Lrclib::new(client.clone(), 2.0)),
         ];
         for p in providers {
