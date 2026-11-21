@@ -40,7 +40,7 @@ impl Default for Form {
             source: SourceKind::File,
             path: String::new(),
             url: String::new(),
-            watch: false,
+            watch: true,
             format: None,
         }
     }
@@ -586,8 +586,6 @@ mod tests {
             handle_key(&mut d, key(KeyCode::Char(c)));
         }
         handle_key(&mut d, key(KeyCode::Enter));
-        d.selected = 3;
-        handle_key(&mut d, key(KeyCode::Char(' ')));
         d.selected = 5;
         match handle_key(&mut d, key(KeyCode::Enter)) {
             Outcome::Import(r) => {
@@ -595,6 +593,13 @@ mod tests {
                 assert!(r.watch);
                 assert!(!r.temporary);
             }
+            _ => panic!("expected an import"),
+        }
+        d.selected = 3;
+        handle_key(&mut d, key(KeyCode::Char(' ')));
+        d.selected = 5;
+        match handle_key(&mut d, key(KeyCode::Enter)) {
+            Outcome::Import(r) => assert!(!r.watch),
             _ => panic!("expected an import"),
         }
     }
