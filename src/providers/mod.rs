@@ -4,6 +4,7 @@ pub mod lrclib;
 pub mod lrcred;
 pub mod resolve;
 pub mod spicy;
+pub mod unison;
 
 use std::fmt;
 use std::sync::Arc;
@@ -251,6 +252,10 @@ pub const KNOWN_PROVIDERS: &[ProviderInfo] = &[
         name: lrcred::NAME,
     },
     ProviderInfo {
+        id: unison::ID,
+        name: unison::NAME,
+    },
+    ProviderInfo {
         id: lrclib::ID,
         name: lrclib::NAME,
     },
@@ -332,6 +337,10 @@ impl Registry {
                 lrcred::ID => providers.push(Arc::new(lrcred::LrcRed::new(
                     client.clone(),
                     config.providers.lrc_red.duration_tolerance_secs,
+                ))),
+                unison::ID => providers.push(Arc::new(unison::Unison::new(
+                    client.clone(),
+                    config.providers.unison.duration_tolerance_secs,
                 ))),
                 lrclib::ID => providers.push(Arc::new(lrclib::Lrclib::new(
                     client.clone(),
@@ -418,6 +427,7 @@ mod tests {
         };
         let providers: Vec<Box<dyn LyricsProvider>> = vec![
             Box::new(lrcred::LrcRed::new(client.clone(), 2.0)),
+            Box::new(unison::Unison::new(client.clone(), 2.0)),
             Box::new(lrclib::Lrclib::new(client.clone(), 2.0)),
         ];
         for p in providers {
