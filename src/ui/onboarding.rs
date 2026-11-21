@@ -23,18 +23,20 @@ const WIDE_FROM: u16 = 100;
 pub enum Step {
     Player,
     Providers,
+    Library,
     Song,
     Customize,
     Done,
 }
 
 impl Step {
-    pub const ALL: [Step; 5] = [Step::Player, Step::Providers, Step::Song, Step::Customize, Step::Done];
+    pub const ALL: [Step; 6] = [Step::Player, Step::Providers, Step::Library, Step::Song, Step::Customize, Step::Done];
 
     pub fn title(self) -> &'static str {
         match self {
             Step::Player => "Your music player",
             Step::Providers => "Lyrics providers",
+            Step::Library => "Your own syncs",
             Step::Song => "Play a song",
             Step::Customize => "Make it yours",
             Step::Done => "All set",
@@ -59,6 +61,7 @@ pub enum Row {
     Player(usize),
     Setting(Item),
     Provider(String),
+    Answer(bool),
     Next,
     Back,
     Skip,
@@ -70,6 +73,10 @@ impl Row {
             Row::Setting(it) => Some(&it.kind),
             _ => None,
         }
+    }
+
+    pub fn is_folder(&self) -> bool {
+        matches!(self.kind(), Some(Kind::Text { folder: true, .. }))
     }
 
     pub fn adjustable(&self) -> bool {
@@ -87,6 +94,7 @@ pub struct Onboarding {
     pub editing: Option<String>,
     pub found_at: Option<Instant>,
     pub auto_advance: bool,
+    pub stores_syncs: Option<bool>,
 }
 
 impl Onboarding {
@@ -97,6 +105,7 @@ impl Onboarding {
             editing: None,
             found_at: None,
             auto_advance: false,
+            stores_syncs: None,
         }
     }
 
@@ -109,7 +118,7 @@ impl Onboarding {
     }
 
     pub fn default_row(&self, rows: &[Row]) -> usize {
-        if self.step == Step::Customize {
+        if self.step == Step::Customize || (self.step == Step::Library && self.stores_syncs.is_none()) {
             return 0;
         }
         rows.iter().position(|r| matches!(r, Row::Next)).unwrap_or(0)
@@ -135,6 +144,16 @@ impl Onboarding {
                     key.label = "Spicy Lyrics API key".into();
                     key.desc = format!("Optional. {} Without one, Spicy Lyrics is skipped and the other providers are used.", key.desc);
                     rows.push(Row::Setting(key));
+                }
+                rows.extend([Row::Next, Row::Back, Row::Skip]);
+            }
+            Step::Library => {
+                rows.extend([Row::Answer(true), Row::Answer(false)]);
+                if self.stores_syncs == Some(true) {
+                    let mut folder = settings::default_library_item();
+                    folder.label = "Library location".into();
+                    folder.desc = format!("Optional. {}", folder.desc);
+                    rows.push(Row::Setting(folder));
                 }
                 rows.extend([Row::Next, Row::Back, Row::Skip]);
             }
@@ -231,6 +250,8 @@ fn row_label(row: &Row, step: Step, app: &App) -> String {
             .unwrap_or_default(),
         Row::Setting(it) => it.label.clone(),
         Row::Provider(id) => provider_name(id).to_string(),
+        Row::Answer(true) => "Yes, I keep sync files".into(),
+        Row::Answer(false) => "No, I don't".into(),
         Row::Next => match step {
             Step::Song if !lyrics_ready(app) => "Skip this step".into(),
             Step::Customize => "Finish".into(),
@@ -261,6 +282,7 @@ fn row_value(row: &Row, app: &App, editing: Option<&str>) -> String {
             _ => settings::value_text(&app.cfg, &it.kind),
         },
         Row::Provider(id) => settings::value_text(&app.cfg, &Kind::Provider(id.clone())),
+        Row::Answer(b) => if app.guide.as_ref().and_then(|g| g.stores_syncs) == Some(*b) { "✓" } else { "" }.into(),
         Row::Next | Row::Back | Row::Skip => String::new(),
     }
 }
@@ -298,6 +320,8 @@ fn row_desc(row: &Row, step: Step, app: &App) -> String {
             }
             s
         }
+        Row::Answer(true) => "Pick the folder where your sync files live, so importing one with L starts right there.".into(),
+        Row::Answer(false) => "Go on. You can still add lyrics any time with L, and set a folder later in Settings → Providers → Local library.".into(),
         Row::Next => match step {
             Step::Player if app.snapshot.is_none() => "No player is followed yet. You can go on and choose one later with p.".into(),
             Step::Player => "Go on to the lyrics providers.".into(),
@@ -307,7 +331,8 @@ fn row_desc(row: &Row, step: Step, app: &App) -> String {
             Step::Providers if spicy_waiting(cfg) => {
                 "Spicy Lyrics has no API key yet, so it is skipped until you add one. The other providers still work.".into()
             }
-            Step::Providers => "Go on and play a song.".into(),
+            Step::Providers => "Go on to your own syncs.".into(),
+            Step::Library => "Go on and play a song.".into(),
             Step::Song if lyrics_ready(app) => "Go on and try out the looks.".into(),
             Step::Song => "Go on without lyrics. The looks are easier to judge with a song that has them.".into(),
             Step::Customize => "Keep these settings and see the keys worth knowing.".into(),
@@ -360,6 +385,16 @@ fn status(step: Step, app: &App, found_at: Option<Instant>) -> Vec<(Tone, String
                 out.push((Tone::Good, format!("✓ {on} provider{} ready", if on == 1 { "" } else { "s" })));
             }
         }
+        Step::Library => {
+            let dir = cfg.providers.local_library.default_dir.trim();
+            match app.guide.as_ref().and_then(|g| g.stores_syncs) {
+                Some(true) if dir.is_empty() => out.push((Tone::Note, "Setting a folder is optional; you can add one later in Settings → Providers → Local library.".into())),
+                Some(true) if cfg.providers.local_library.import_start().is_none() => out.push((Tone::Bad, format!("✗ {dir} is not a folder"))),
+                Some(true) => out.push((Tone::Good, format!("✓ Imports start in {dir}"))),
+                Some(false) => out.push((Tone::Note, "No problem. L still adds lyrics whenever you need them.".into())),
+                None => {}
+            }
+        }
         Step::Song => {
             let title = app.track.as_ref().map(|t| t.title.clone()).unwrap_or_default();
             match &app.lyrics {
@@ -405,6 +440,7 @@ fn intro(step: Step, app: &App, side: bool) -> String {
     match step {
         Step::Player => "Lyrminal shows synced lyrics for whatever your music player is playing. It finds players through MPRIS, so open Spotify, spotifast, a browser or any other MPRIS player and it shows up here.".into(),
         Step::Providers => "Lyrics come from the first provider in this list that has them. lrc.red and LRCLIB work without any setup.".into(),
+        Step::Library => "Lyrminal can also use sync files you keep yourself, such as LRC, TTML or SRT, from its local library. Do you store syncs for your songs?".into(),
         Step::Song => format!("Play a song in {}. Lyrminal looks it up and the lyrics appear {place}.", player_name(app)),
         Step::Customize => format!("Try the main looks while the song plays; the lyrics {place} change as you go. ←→ changes the selected setting."),
         Step::Done => "You're ready. These keys are worth knowing, and ? lists every one.".into(),
@@ -488,7 +524,10 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     }
     let rows = guide.rows(app);
     let selected = guide.selected.min(rows.len().saturating_sub(1));
-    let desc_text = if guide.editing.is_some() {
+    let folder = rows.get(selected).is_some_and(Row::is_folder);
+    let desc_text = if guide.editing.is_some() && folder {
+        "Type or paste a folder, Tab to complete it, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
+    } else if guide.editing.is_some() {
         "Type or paste the key, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
     } else {
         rows.get(selected).map(|r| row_desc(r, guide.step, app)).unwrap_or_default()
@@ -671,7 +710,9 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
         text_lines.push(Line::from(Span::styled(l, panel_ink(theme, bg, 0.6))));
     }
     f.render_widget(Paragraph::new(text_lines), text);
-    let hint = if guide.editing.is_some() {
+    let hint = if guide.editing.is_some() && folder {
+        "↵ save · Tab complete · Esc cancel"
+    } else if guide.editing.is_some() {
         "↵ save · Esc cancel"
     } else if guide.step == Step::Providers {
         "↑↓ move · Space on/off · K/J reorder · Esc back"

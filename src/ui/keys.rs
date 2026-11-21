@@ -49,6 +49,7 @@ pub const HELP: &[BindingGroup] = &[
             Binding { keys: "s", desc: "Search all providers and pick another sync" },
             Binding { keys: "L", desc: "Local library: add your own lyrics file, URL or clipboard" },
             Binding { keys: "R", desc: "Fetch lyrics again, skipping the cache" },
+            Binding { keys: "Tab S-Tab", desc: "In dialogs: jump to the next / previous category" },
             Binding { keys: "q  Ctrl-C", desc: "Quit" },
             Binding { keys: "Mouse", desc: "Click to select, again to open; wheel moves; click outside closes" },
         ],
