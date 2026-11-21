@@ -826,7 +826,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                 ),
                 item(
                     "Unofficial",
-                    "Lyrminal is an unofficial app. It is not made, endorsed or supported by Spicy Lyrics, lrc.red or LRCLIB; it uses their public APIs.",
+                    "Lyrminal is an unofficial app. It is not made, endorsed or supported by Spicy Lyrics, lrc.red, Better Lyrics (Unison) or LRCLIB; it uses their public APIs.",
                     Kind::Info,
                 ),
                 item(

@@ -575,7 +575,7 @@ fn draw_help(f: &mut Frame, theme: &Theme, hits: &mut UiHits) {
         lines.push(Line::default());
     }
     lines.push(Line::from(Span::styled(
-        "Lyrminal is unofficial and not affiliated with Spicy Lyrics, lrc.red or LRCLIB.",
+        "Lyrminal is unofficial and not affiliated with Spicy Lyrics, lrc.red, Better Lyrics or LRCLIB.",
         panel_ink(theme, bg, 0.45),
     )));
     f.render_widget(Paragraph::new(lines), inner);
