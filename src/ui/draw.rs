@@ -17,6 +17,7 @@ use crate::render::{FrameInput, LinkSpan};
 use crate::term::kitty::{self, Placement};
 use crate::theme::Theme;
 use crate::ui::keys::{Action, HELP};
+use crate::ui::library::{LibraryDialog, Row as LibRow, SourceKind};
 use crate::ui::settings::{self, Kind};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -161,6 +162,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
         Overlay::Settings(_) => draw_settings(f, app, &mut hits),
         Overlay::Players { .. } => draw_players(f, app, &mut hits),
         Overlay::Syncs(_) => draw_syncs(f, app, &mut hits),
+        Overlay::Library(_) => draw_library(f, app, &mut hits),
     }
     app.ui = hits;
     DrawOutput {
@@ -217,7 +219,9 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) -> Option<Placement> {
                 provider_name(&resolution.candidate.provider),
                 prepared.lyrics.kind.label()
             ));
-            if resolution.manual {
+            if resolution.candidate.provider == crate::providers::local::ID && resolution.candidate.id == crate::app::TEMPORARY_ID {
+                s.push_str(" · temporary");
+            } else if resolution.manual {
                 s.push_str(" · chosen");
             }
             s
@@ -350,7 +354,7 @@ fn draw_lyrics(f: &mut Frame, app: &mut App, area: Rect, now: Instant, dt: f64, 
                 lines.push(dim(format!("{}: {}", a.provider, a.outcome)));
             }
             lines.push(Line::default());
-            lines.push(dim("s: search every provider · R: try again · Esc: settings".into()));
+            lines.push(dim("s: search every provider · L: add your own lyrics · R: try again · Esc: settings".into()));
             centered_message(f, &theme, area, lines);
         }
     }
@@ -845,6 +849,246 @@ fn draw_syncs(f: &mut Frame, app: &App, hits: &mut UiHits) {
     );
 }
 
+fn library_desc(app: &App, d: &LibraryDialog, row: Option<LibRow>) -> String {
+    if let Some(id) = &d.confirm_remove {
+        let title = d.entries.iter().find(|e| &e.id == id).map(|e| e.track.title.clone()).unwrap_or_default();
+        return format!("Press y or click it again to remove “{title}” from the library, any other key to cancel.");
+    }
+    if d.editing.is_some() {
+        return if d.form.source == SourceKind::File {
+            "Type or paste a path, Tab to complete it, Enter to save, Esc to cancel, Ctrl-U to clear.".into()
+        } else {
+            "Type or paste the address, Enter to save, Esc to cancel, Ctrl-U to clear.".into()
+        };
+    }
+    match row {
+        Some(LibRow::Temporary) => "Yes: show the lyrics now without saving them; they are forgotten when the song changes or Lyrminal closes. No: save them in the local library for this song.".into(),
+        Some(LibRow::Source) => "Where to load the lyrics from: a file on this computer, the system clipboard (or text pasted into this dialog with your terminal), or a web address.".into(),
+        Some(LibRow::Location) if d.form.source == SourceKind::Url => "An http:// or https:// address that returns a lyrics file. Enter to edit.".into(),
+        Some(LibRow::Location) => "Path to the lyrics file; ~ is your home folder. Enter to edit, Tab completes while editing.".into(),
+        Some(LibRow::Watch) => format!(
+            "Yes: read the {} again every time these lyrics load, so later edits show up; the saved copy is used when it can't be read. No: keep the lyrics as they are now, saved in {}.",
+            if d.form.source == SourceKind::Url { "URL" } else { "file" },
+            app.library.dir().display()
+        ),
+        Some(LibRow::Format) => "Auto detects LRC, TTML, SRT, WebVTT, ASS/SSA, SBV, SAMI, JSON and plain text. Pick one if the detection gets it wrong.".into(),
+        Some(LibRow::Import) => match &d.track {
+            Some(_) => "Load the lyrics with the options above for the song that is playing.".into(),
+            None => "Nothing is playing, so there is no song to add lyrics to.".into(),
+        },
+        Some(LibRow::Entry(i)) => d
+            .entries
+            .get(i)
+            .map(|e| {
+                let from = e.source.location().map(|l| format!(" from {l}")).unwrap_or_default();
+                format!("{}{from}. Enter uses these lyrics for the playing song, d removes them from the library.", e.summary())
+            })
+            .unwrap_or_default(),
+        None => String::new(),
+    }
+}
+
+fn draw_library(f: &mut Frame, app: &App, hits: &mut UiHits) {
+    let Overlay::Library(d) = &app.overlay else { return };
+    let theme = &app.theme;
+    let area = f.area();
+    let (inner, bg) = modal(f, theme, "Local library", 100, area.height.saturating_sub(4).max(18), hits);
+    let [head, list, desc, status, footer] = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(4),
+        Constraint::Length(3),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .areas(inner);
+    let width = inner.width as usize;
+    let heading = |s: String| {
+        Line::from(Span::styled(
+            s,
+            Style::default().fg(theme.accent.to_color()).bg(bg.to_color()).add_modifier(Modifier::BOLD),
+        ))
+    };
+
+    let mut head_lines = Vec::new();
+    match &d.track {
+        Some((q, identity)) => {
+            let mut s = format!("{} — {}", q.title, q.artist_line());
+            if let Some(a) = &q.album {
+                s.push_str(&format!(" · {a}"));
+            }
+            head_lines.push(Line::from(vec![
+                Span::styled("For  ", panel_ink(theme, bg, 0.5)),
+                Span::styled(truncate(&s, width.saturating_sub(5)), panel_ink(theme, bg, 0.95).add_modifier(Modifier::BOLD)),
+            ]));
+            let temp = app.temporary.as_ref().is_some_and(|(id, _)| id == identity);
+            let state = if temp {
+                "Temporary lyrics are loaded for this song".to_string()
+            } else if let Some(e) = d.track_entry() {
+                format!("Saved for this song: {}", e.summary())
+            } else {
+                "Nothing saved for this song yet".to_string()
+            };
+            head_lines.push(Line::from(Span::styled(truncate(&state, width), panel_ink(theme, bg, 0.6))));
+        }
+        None => {
+            head_lines.push(Line::from(Span::styled("Nothing is playing", panel_ink(theme, bg, 0.95).add_modifier(Modifier::BOLD))));
+            head_lines.push(Line::from(Span::styled("Saved lyrics can still be removed below.", panel_ink(theme, bg, 0.6))));
+        }
+    }
+    f.render_widget(Paragraph::new(head_lines), head);
+
+    let rows = d.rows();
+    let selected = d.selected.min(rows.len().saturating_sub(1));
+    let sel_bg = bg.mix(theme.accent, 0.18);
+    let showing = match &app.lyrics {
+        LyricsState::Ready { resolution, .. } if resolution.candidate.provider == crate::providers::local::ID => Some(resolution.candidate.id.clone()),
+        _ => None,
+    };
+    let label_w = 22usize;
+    let mut display: Vec<(Option<usize>, Line)> = vec![(None, heading("Import".into()))];
+    let mut entries_started = false;
+    for (i, row) in rows.iter().enumerate() {
+        let is_sel = i == selected;
+        let row_bg = if is_sel { sel_bg } else { bg };
+        if let LibRow::Entry(n) = row {
+            if !entries_started {
+                entries_started = true;
+                display.push((None, Line::default()));
+                display.push((None, heading(format!("Library · {} saved", d.entries.len()))));
+            }
+            let Some(e) = d.entries.get(*n) else { continue };
+            let mark = if showing.as_deref() == Some(e.id.as_str()) { "✓ " } else { "  " };
+            let right = if d.confirm_remove.as_deref() == Some(e.id.as_str()) {
+                "press y to remove".to_string()
+            } else {
+                e.summary()
+            };
+            let rw = UnicodeWidthStr::width(right.as_str());
+            let main = format!("{} — {}", e.track.title, e.track.artist_line());
+            let main = truncate(&main, width.saturating_sub(rw + 5));
+            let fill = width.saturating_sub(2 + UnicodeWidthStr::width(main.as_str()) + rw);
+            display.push((
+                Some(i),
+                Line::from(vec![
+                    Span::styled(mark, Style::default().fg(theme.accent.to_color()).bg(row_bg.to_color())),
+                    Span::styled(main, panel_ink(theme, row_bg, if is_sel { 1.0 } else { 0.8 })),
+                    Span::styled(" ".repeat(fill), panel_ink(theme, row_bg, 0.5)),
+                    Span::styled(right, panel_ink(theme, row_bg, 0.5)),
+                ]),
+            ));
+            continue;
+        }
+        let yes_no = |v: bool| if v { "yes" } else { "no" }.to_string();
+        let (label, value, choice) = match row {
+            LibRow::Temporary => ("Temporary", yes_no(d.form.temporary), true),
+            LibRow::Source => ("Source", d.form.source.label().to_string(), true),
+            LibRow::Location => {
+                let url = d.form.source == SourceKind::Url;
+                let value = match (&d.editing, d.location()) {
+                    (Some(buf), _) if is_sel => format!("{buf}▏"),
+                    (_, "") if url => "(https://example.com/song.ttml)".to_string(),
+                    (_, "") => "(~/Music/lyrics/song.lrc)".to_string(),
+                    (_, loc) => loc.to_string(),
+                };
+                (if url { "URL" } else { "Path" }, value, false)
+            }
+            LibRow::Watch => ("Check for changes", yes_no(d.form.watch), true),
+            LibRow::Format => ("Format", d.form.format.map(|f| f.label().to_string()).unwrap_or_else(|| "auto".into()), true),
+            LibRow::Import => {
+                let value = if let Some(b) = &d.busy {
+                    format!("{} {b}…", spinner(app))
+                } else {
+                    match (&d.pasted, d.form.source) {
+                        (Some(p), SourceKind::Clipboard) => format!("↵ uses the pasted text ({} lines)", p.trim().lines().count()),
+                        (_, SourceKind::Clipboard) => "↵ reads the clipboard".into(),
+                        _ => "↵".into(),
+                    }
+                };
+                ("Import", value, false)
+            }
+            LibRow::Entry(_) => continue,
+        };
+        let value = if is_sel && choice { format!("‹ {value} ›") } else { value };
+        let value = if value.ends_with('▏') {
+            let keep = width.saturating_sub(label_w + 3);
+            let chars: Vec<char> = value.chars().collect();
+            chars[chars.len().saturating_sub(keep)..].iter().collect()
+        } else {
+            truncate(&value, width.saturating_sub(label_w + 3))
+        };
+        let vw = UnicodeWidthStr::width(value.as_str());
+        let pad = label_w.saturating_sub(UnicodeWidthStr::width(label));
+        let tail = width.saturating_sub(label_w + 2 + vw);
+        let label_style = if *row == LibRow::Import {
+            panel_ink(theme, row_bg, 0.95).add_modifier(Modifier::BOLD)
+        } else {
+            panel_ink(theme, row_bg, if is_sel { 1.0 } else { 0.8 })
+        };
+        display.push((
+            Some(i),
+            Line::from(vec![
+                Span::styled(if is_sel { "› " } else { "  " }, Style::default().fg(theme.accent.to_color()).bg(row_bg.to_color())),
+                Span::styled(label, label_style),
+                Span::styled(" ".repeat(pad), panel_ink(theme, row_bg, 0.5)),
+                Span::styled(
+                    value,
+                    if is_sel {
+                        Style::default().fg(theme.accent.to_color()).bg(row_bg.to_color()).add_modifier(Modifier::BOLD)
+                    } else {
+                        panel_ink(theme, row_bg, 0.6)
+                    },
+                ),
+                Span::styled(" ".repeat(tail), panel_ink(theme, row_bg, 0.5)),
+            ]),
+        ));
+    }
+    if !entries_started {
+        display.push((None, Line::default()));
+        display.push((None, heading("Library · 0 saved".into())));
+        display.push((None, Line::from(Span::styled("  Lyrics you save show up here.", panel_ink(theme, bg, 0.5)))));
+    }
+    let visible = list.height as usize;
+    let sel_pos = display.iter().position(|(r, _)| *r == Some(selected)).unwrap_or(0);
+    let scroll = (sel_pos + 2).saturating_sub(visible).min(display.len().saturating_sub(visible));
+    let mut lines = Vec::new();
+    for (n, (row, line)) in display.into_iter().enumerate().skip(scroll).take(visible) {
+        let y = list.y + (n - scroll) as u16;
+        if let Some(i) = row {
+            hits.push(row_rect(list.x, y, list.width), Target::Row(i), list);
+            let choice = matches!(rows.get(i), Some(LibRow::Temporary | LibRow::Source | LibRow::Watch | LibRow::Format));
+            if i == selected && choice {
+                let vx = list.x + (label_w + 2) as u16;
+                let vw = line.spans.get(3).map(|s| UnicodeWidthStr::width(s.content.as_ref())).unwrap_or(0) as u16;
+                hits.push(row_rect(vx, y, 2), Target::Decrease, list);
+                hits.push(row_rect(vx + vw.saturating_sub(2), y, 2), Target::Increase, list);
+            }
+        }
+        lines.push(line);
+    }
+    f.render_widget(Paragraph::new(lines), list);
+
+    f.render_widget(
+        Paragraph::new(library_desc(app, d, d.current()))
+            .style(panel_ink(theme, bg, 0.65))
+            .wrap(Wrap { trim: true }),
+        desc,
+    );
+    let (status_text, status_style) = if let Some(b) = &d.busy {
+        (format!("{} {b}…", spinner(app)), panel_ink(theme, bg, 0.75))
+    } else if let Some(e) = &d.error {
+        (format!("✗ {e}"), Style::default().fg(theme.accent.to_color()).bg(bg.to_color()).add_modifier(Modifier::BOLD))
+    } else if let Some(n) = &d.notice {
+        (n.clone(), panel_ink(theme, bg, 0.75))
+    } else {
+        (String::new(), panel_ink(theme, bg, 0.5))
+    };
+    f.render_widget(Paragraph::new(truncate(&status_text, width)).style(status_style), status);
+    f.render_widget(
+        Paragraph::new("↑↓ move · ←→ change · ↵ select · d remove · paste lyrics or a path · Esc close").style(panel_ink(theme, bg, 0.4)),
+        footer,
+    );
+}
+
 const PIXEL_IDS: [u32; 2] = [9001, 9002];
 const ART_Z: i32 = -1_073_741_825;
 const PIXEL_Z: i32 = ART_Z - 1;
@@ -961,6 +1205,112 @@ pub fn write_links(out: &mut impl Write, links: &[LinkSpan]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn draws_the_library_dialog() {
+        let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(crate::config::Config::default(), crate::term::TermCaps::default(), player_tx, msg_tx);
+        app.library = crate::library::Library::new(std::env::temp_dir().join("lyrminal-draw-test-none"));
+        app.track = Some(crate::player::TrackMeta {
+            title: "Call Back".into(),
+            artists: vec!["Don Toliver".into()],
+            album: Some("OCTANE".into()),
+            length: Some(123.8),
+            ..Default::default()
+        });
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        for code in [crossterm::event::KeyCode::Char('L'), crossterm::event::KeyCode::Down, crossterm::event::KeyCode::Down] {
+            app.on_event(crossterm::event::Event::Key(crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE)));
+        }
+        term.draw(|f| {
+            draw(f, &mut app, Instant::now(), 0.0);
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        let text: Vec<String> = (0..buf.area.height)
+            .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect())
+            .collect();
+        let joined = text.join("\n");
+        assert!(joined.contains("Local library"));
+        assert!(joined.contains("Check for changes"));
+        assert!(joined.contains("(~/Music/lyrics/song.lrc)"));
+        assert!(app.ui.targets.iter().any(|(_, t)| *t == Target::Row(5)));
+    }
+
+    #[tokio::test]
+    async fn imports_saved_and_temporary_lyrics_end_to_end() {
+        use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+        let press = |app: &mut App, code: KeyCode| app.on_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+        let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(crate::config::Config::default(), crate::term::TermCaps::default(), player_tx, msg_tx);
+        let dir = std::env::temp_dir().join(format!("lyrminal-e2e-{}", std::process::id()));
+        app.library = crate::library::Library::new(dir.clone());
+        let track = crate::player::TrackMeta {
+            title: "Lyrminal Test Song".into(),
+            artists: vec!["Nobody".into()],
+            length: Some(30.0),
+            ..Default::default()
+        };
+        let snapshot = |t: crate::player::TrackMeta| {
+            crate::player::PlayerEvent::Active(Some(crate::player::Snapshot {
+                player: crate::player::PlayerInfo {
+                    bus: "org.mpris.MediaPlayer2.test".into(),
+                    identity: "Test".into(),
+                    process: None,
+                    pid: None,
+                    desktop_entry: None,
+                    status: crate::player::Status::Paused,
+                    now_playing: None,
+                },
+                track: Some(t),
+                status: crate::player::Status::Paused,
+                rate: 1.0,
+                position: 0.0,
+                sampled_at: Instant::now(),
+                caps: Default::default(),
+            }))
+        };
+        app.on_player(snapshot(track.clone()));
+
+        press(&mut app, KeyCode::Char('L'));
+        app.on_event(Event::Paste("1\n00:00:01,000 --> 00:00:02,000\nsaved line\n".into()));
+        press(&mut app, KeyCode::Enter);
+        let msg = msg_rx.recv().await.unwrap();
+        app.on_msg(msg);
+        assert!(matches!(app.overlay, Overlay::None));
+        match &app.lyrics {
+            LyricsState::Ready { prepared, resolution, .. } => {
+                assert_eq!(resolution.candidate.provider, crate::providers::local::ID);
+                assert_eq!(prepared.lyrics.lines[0].lead.text(), "saved line");
+            }
+            _ => panic!("lyrics were not installed"),
+        }
+        let entries = app.library.entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].detected, Some(crate::lyrics::formats::Format::Srt));
+        assert_eq!(entries[0].key, track.query().key());
+
+        press(&mut app, KeyCode::Char('L'));
+        press(&mut app, KeyCode::Enter);
+        app.on_event(Event::Paste("[00:01.00]temporary line".into()));
+        press(&mut app, KeyCode::Enter);
+        let msg = msg_rx.recv().await.unwrap();
+        app.on_msg(msg);
+        assert!(app.temporary.is_some());
+        assert_eq!(app.library.entries().len(), 1);
+        match &app.lyrics {
+            LyricsState::Ready { prepared, .. } => assert_eq!(prepared.lyrics.lines[0].lead.text(), "temporary line"),
+            _ => panic!("temporary lyrics were not installed"),
+        }
+
+        let mut other = track.clone();
+        other.title = "Another Song".into();
+        app.on_player(snapshot(other));
+        assert!(app.temporary.is_none());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn later_targets_win_and_are_clipped() {

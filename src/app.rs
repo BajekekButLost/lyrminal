@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::config::{Config, PlayerMode, Renderer, VisualStyle};
+use crate::config::{Config, MatchTier, PlayerMode, Renderer, VisualStyle};
+use crate::library::{self, Entry, Library, Source};
 use crate::lyrics::process::{self, ItemKind, PrepareOptions, Prepared};
 use crate::lyrics::{Lyrics, SyncKind};
 use crate::player::clock::PlaybackClock;
@@ -20,6 +21,7 @@ use crate::term::TermCaps;
 use crate::theme::{Artwork, Theme};
 use crate::ui::draw::{Target, UiHits};
 use crate::ui::keys::{self, Action};
+use crate::ui::library::{self as library_ui, ImportRequest, LibraryDialog};
 use crate::ui::settings::{self, SettingsAction, SettingsOutcome, SettingsState};
 
 const FETCH_DEBOUNCE: Duration = Duration::from_millis(350);
@@ -91,9 +93,29 @@ pub enum Overlay {
     Settings(SettingsState),
     Players { selected: usize },
     Syncs(SyncPicker),
+    Library(LibraryDialog),
+}
+
+pub const TEMPORARY_ID: &str = "temporary";
+
+pub enum LibraryDone {
+    Imported {
+        identity: String,
+        key: String,
+        resolution: Resolution,
+        temporary: bool,
+        warning: Option<String>,
+    },
+    Applied {
+        identity: String,
+        key: String,
+        resolution: Resolution,
+    },
+    Removed(Entry),
 }
 
 pub enum AppMsg {
+    Library { seq: u64, result: Result<LibraryDone, String> },
     Resolved { generation: u64, outcome: Outcome },
     Artwork { url: String, result: Result<Artwork, String> },
     Search { generation: u64, provider: String, result: Result<Vec<Candidate>, String> },
@@ -109,6 +131,10 @@ pub struct App {
     pub client: reqwest::Client,
     pub registry: Registry,
     pub cache: Cache,
+    pub library: Library,
+    pub temporary: Option<(String, Resolution)>,
+    library_form: library_ui::Form,
+    library_seq: u64,
     player_tx: UnboundedSender<PlayerCommand>,
     msg_tx: UnboundedSender<AppMsg>,
     pub players: Vec<PlayerInfo>,
@@ -165,6 +191,10 @@ impl App {
             client,
             registry,
             cache,
+            library: Library::default(),
+            temporary: None,
+            library_form: library_ui::Form::default(),
+            library_seq: 0,
             player_tx,
             msg_tx,
             players: Vec::new(),
@@ -341,10 +371,19 @@ impl App {
             || (self.clock.is_playing() && matches!(self.lyrics, LyricsState::Ready { .. }))
             || matches!(self.lyrics, LyricsState::Loading | LyricsState::Waiting)
             || matches!(&self.overlay, Overlay::Syncs(p) if !p.pending.is_empty() || p.applying.is_some())
+            || matches!(&self.overlay, Overlay::Library(d) if d.busy.is_some())
     }
 
     fn start_fetch(&mut self) {
         let Some(track) = self.track.clone() else { return };
+        if let Some((identity, resolution)) = &self.temporary
+            && self.track_identity.as_ref() == Some(identity)
+        {
+            let resolution = resolution.clone();
+            self.bypass_cache = false;
+            self.install(resolution);
+            return;
+        }
         let q = track.query();
         if !q.is_searchable() && q.spotify_id.is_none() {
             self.lyrics = LyricsState::NotFound(Vec::new());
@@ -408,6 +447,13 @@ impl App {
     fn on_track_change(&mut self, track: Option<TrackMeta>) {
         self.track_identity = track.as_ref().map(|t| t.identity_key());
         self.track = track;
+        if self
+            .temporary
+            .as_ref()
+            .is_some_and(|(id, _)| self.track_identity.as_ref() != Some(id))
+        {
+            self.temporary = None;
+        }
         self.follow = Follow::default();
         self.cell.reset();
         self.fetch_due = None;
@@ -478,6 +524,7 @@ impl App {
     pub fn on_msg(&mut self, msg: AppMsg) {
         self.dirty = true;
         match msg {
+            AppMsg::Library { seq, result } => self.on_library(seq, result),
             AppMsg::Resolved { generation, outcome } => {
                 if generation != self.generation {
                     return;
@@ -538,6 +585,7 @@ impl App {
                         }
                         let name = crate::providers::provider_name(&candidate.provider).to_string();
                         self.overlay = Overlay::None;
+                        self.temporary = None;
                         self.generation += 1;
                         self.install(Resolution {
                             candidate,
@@ -564,11 +612,11 @@ impl App {
         self.dirty = true;
         match ev {
             Event::Key(k) if k.kind != KeyEventKind::Release => self.on_key(k),
-            Event::Paste(text) => {
-                if let Overlay::Settings(s) = &mut self.overlay {
-                    settings::paste(s, &text);
-                }
-            }
+            Event::Paste(text) => match &mut self.overlay {
+                Overlay::Settings(s) => settings::paste(s, &text),
+                Overlay::Library(d) => library_ui::paste(d, &text),
+                _ => {}
+            },
             Event::Mouse(m) if self.cfg.appearance.mouse && !matches!(self.overlay, Overlay::None) => self.on_overlay_mouse(m),
             Event::Mouse(m) if self.cfg.appearance.mouse => match m.kind {
                 MouseEventKind::ScrollDown => self.scroll_by(MOUSE_SCROLL_ROWS),
@@ -639,6 +687,16 @@ impl App {
                 }
                 return;
             }
+            Overlay::Library(dialog) => {
+                match library_ui::handle_key(dialog, key) {
+                    library_ui::Outcome::None => {}
+                    library_ui::Outcome::Close => self.close_library(),
+                    library_ui::Outcome::Import(req) => self.start_import(req),
+                    library_ui::Outcome::Apply(entry) => self.apply_entry(entry),
+                    library_ui::Outcome::Remove(entry) => self.remove_entry(entry),
+                }
+                return;
+            }
             Overlay::Syncs(picker) => {
                 let order = ordered_ids(&self.cfg);
                 let rows = picker.rows(&order);
@@ -672,6 +730,7 @@ impl App {
                                 self.state.save();
                             }
                             self.overlay = Overlay::None;
+                            self.temporary = None;
                             self.schedule_fetch(Duration::ZERO);
                             self.notify("Picking the best sync automatically");
                         }
@@ -721,7 +780,7 @@ impl App {
 
     fn on_overlay_click(&mut self, column: u16, row: u16) {
         if !self.ui.in_modal(column, row) {
-            self.overlay = Overlay::None;
+            self.close_library();
             return;
         }
         let target = self.ui.at(column, row);
@@ -773,6 +832,28 @@ impl App {
                 p.selected = i;
                 same.then_some(KeyCode::Enter)
             }
+            (Overlay::Library(d), Some(Target::Row(i))) => {
+                let same = d.selected == i;
+                if d.editing.is_some() && same {
+                    None
+                } else if d.confirm_remove.is_some() {
+                    if same {
+                        Some(KeyCode::Char('y'))
+                    } else {
+                        d.confirm_remove = None;
+                        d.selected = i;
+                        None
+                    }
+                } else {
+                    if !same && d.editing.is_some() {
+                        library_ui::handle_key(d, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+                    }
+                    d.selected = i;
+                    same.then_some(KeyCode::Enter)
+                }
+            }
+            (Overlay::Library(_), Some(Target::Decrease)) => Some(KeyCode::Left),
+            (Overlay::Library(_), Some(Target::Increase)) => Some(KeyCode::Right),
             _ => None,
         };
         if let Some(code) = key {
@@ -902,6 +983,195 @@ impl App {
         }
     }
 
+    fn open_library(&mut self) {
+        let track = self
+            .track
+            .as_ref()
+            .filter(|t| !matches!(t.media_kind(), MediaKind::Ad | MediaKind::Episode))
+            .map(|t| (t.query(), t.identity_key()));
+        self.library_seq += 1;
+        let entries = self.library.entries();
+        self.overlay = Overlay::Library(LibraryDialog::new(track, self.library_form.clone(), entries, self.library_seq));
+    }
+
+    fn close_library(&mut self) {
+        if let Overlay::Library(d) = &self.overlay {
+            self.library_form = d.form.clone();
+        }
+        self.overlay = Overlay::None;
+    }
+
+    fn library_busy(&mut self, what: &str) -> Option<u64> {
+        let Overlay::Library(d) = &mut self.overlay else { return None };
+        d.busy = Some(what.to_string());
+        d.error = None;
+        d.notice = None;
+        Some(d.seq)
+    }
+
+    fn spawn_library<F>(&mut self, what: &str, task: F)
+    where
+        F: std::future::Future<Output = Result<LibraryDone, String>> + Send + 'static,
+    {
+        let Some(seq) = self.library_busy(what) else { return };
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            let result = task.await;
+            let _ = tx.send(AppMsg::Library { seq, result });
+        });
+    }
+
+    fn start_import(&mut self, req: ImportRequest) {
+        let what = match (&req.source, req.pasted.is_some()) {
+            (Source::Clipboard, true) => "Reading the pasted lyrics",
+            (Source::Clipboard, false) => "Reading the clipboard",
+            (Source::File(_), _) => "Reading the file",
+            (Source::Url(_), _) => "Downloading",
+        };
+        let client = self.client.clone();
+        let lib = self.library.clone();
+        self.spawn_library(what, import(req, client, lib));
+    }
+
+    fn apply_entry(&mut self, entry: Entry) {
+        let Some((q, identity)) = (match &self.overlay {
+            Overlay::Library(d) => d.track.clone(),
+            _ => None,
+        }) else {
+            if let Overlay::Library(d) = &mut self.overlay {
+                d.error = Some("Nothing is playing, so there is no song to use these lyrics for".into());
+            }
+            return;
+        };
+        let client = self.client.clone();
+        let lib = self.library.clone();
+        self.spawn_library("Loading", async move {
+            let lyrics = lib.load(&entry, &client, q.duration).await?;
+            let key = q.key();
+            let tier = if entry.key == key { MatchTier::Exact } else { MatchTier::Related };
+            Ok(LibraryDone::Applied {
+                identity,
+                key,
+                resolution: Resolution {
+                    candidate: crate::providers::local::entry_candidate(&entry, Some(tier)),
+                    lyrics,
+                    manual: true,
+                },
+            })
+        });
+    }
+
+    fn remove_entry(&mut self, entry: Entry) {
+        let lib = self.library.clone();
+        self.spawn_library("Removing", async move {
+            let id = entry.id.clone();
+            tokio::task::spawn_blocking(move || lib.remove(&id))
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| format!("could not update the library: {e}"))?;
+            Ok(LibraryDone::Removed(entry))
+        });
+    }
+
+    fn show_now(&mut self, resolution: Resolution) {
+        self.generation += 1;
+        self.fetch_due = None;
+        self.install(resolution);
+    }
+
+    fn on_library(&mut self, seq: u64, result: Result<LibraryDone, String>) {
+        let open = matches!(&self.overlay, Overlay::Library(d) if d.seq == seq);
+        if open && let Overlay::Library(d) = &mut self.overlay {
+            d.busy = None;
+        }
+        let done = match result {
+            Ok(done) => done,
+            Err(e) => {
+                match &mut self.overlay {
+                    Overlay::Library(d) if open => d.error = Some(e),
+                    _ => self.notify(format!("Local library: {e}")),
+                }
+                return;
+            }
+        };
+        let local_on = self.cfg.providers.is_enabled(crate::providers::local::ID);
+        match done {
+            LibraryDone::Imported {
+                identity,
+                key,
+                resolution,
+                temporary,
+                warning,
+            } => {
+                let current = self.track_identity.as_deref() == Some(identity.as_str());
+                let mut msg = if temporary {
+                    if current {
+                        self.temporary = Some((identity, resolution.clone()));
+                        self.show_now(resolution);
+                        "Loaded temporary lyrics for this song".to_string()
+                    } else {
+                        "The song changed, so the temporary lyrics were dropped".to_string()
+                    }
+                } else {
+                    if self.state.choices.remove(&key).is_some() {
+                        self.state.save();
+                    }
+                    if current {
+                        self.temporary = None;
+                        self.show_now(resolution);
+                    }
+                    if local_on {
+                        "Saved to the local library".to_string()
+                    } else {
+                        "Saved, but the Local library provider is off: Esc → Providers".to_string()
+                    }
+                };
+                if let Some(w) = warning {
+                    msg.push_str(&format!(" · {w}"));
+                }
+                if open {
+                    self.close_library();
+                }
+                self.notify(msg);
+            }
+            LibraryDone::Applied { identity, key, resolution } => {
+                let title = resolution.candidate.title.clone();
+                self.state.choices.insert(key, resolution.candidate.clone());
+                self.state.save();
+                if self.track_identity.as_deref() == Some(identity.as_str()) {
+                    self.temporary = None;
+                    self.show_now(resolution);
+                }
+                if open {
+                    self.close_library();
+                }
+                self.notify(if local_on {
+                    format!("Using “{title}” from the local library for this track")
+                } else {
+                    "Chosen, but the Local library provider is off: Esc → Providers".to_string()
+                });
+            }
+            LibraryDone::Removed(entry) => {
+                let local = crate::providers::local::ID;
+                let before = self.state.choices.len();
+                self.state.choices.retain(|_, c| !(c.provider == local && c.id == entry.id));
+                if self.state.choices.len() != before {
+                    self.state.save();
+                }
+                let showing = matches!(&self.lyrics, LyricsState::Ready { resolution, .. }
+                    if resolution.candidate.provider == local && resolution.candidate.id == entry.id);
+                if showing {
+                    self.schedule_fetch(Duration::ZERO);
+                }
+                let entries = self.library.entries();
+                if let Overlay::Library(d) = &mut self.overlay {
+                    d.set_entries(entries);
+                }
+                self.notify(format!("Removed “{}” from the library", entry.track.title));
+            }
+        }
+    }
+
     fn toggle<F: FnOnce(&mut Config)>(&mut self, f: F) {
         let old = self.cfg.clone();
         f(&mut self.cfg);
@@ -1003,6 +1273,7 @@ impl App {
             Action::Settings => self.overlay = Overlay::Settings(SettingsState::new()),
             Action::Players => self.open_players(),
             Action::Syncs => self.open_syncs(),
+            Action::Library => self.open_library(),
             Action::Refetch => {
                 if self.track.is_some() {
                     if let Some(key) = self.track_key() {
@@ -1135,6 +1406,72 @@ impl App {
             }
         }
     }
+}
+
+async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
+    let text = match req.pasted {
+        Some(p) => p,
+        None => library::read_source(&req.source, &client).await?,
+    };
+    if text.len() > library::MAX_BYTES {
+        return Err("the lyrics are larger than 8 MB".into());
+    }
+    let (lyrics, detected) = library::parse(&text, &req.source, req.format, req.track.duration)?;
+    let warning = library::title_warning(&text, detected, &req.track);
+    let key = req.track.key();
+    if req.temporary {
+        let candidate = Candidate {
+            provider: crate::providers::local::ID.into(),
+            id: TEMPORARY_ID.into(),
+            title: req.track.title.clone(),
+            artists: req.track.artists.clone(),
+            album: req.track.album.clone(),
+            duration: req.track.duration,
+            tier: Some(MatchTier::Exact),
+            kind_hint: Some(lyrics.kind),
+            note: Some(format!("temporary {} {}", req.source.label(), req.source.name())),
+        };
+        return Ok(LibraryDone::Imported {
+            identity: req.identity,
+            key,
+            resolution: Resolution {
+                candidate,
+                lyrics,
+                manual: true,
+            },
+            temporary: true,
+            warning,
+        });
+    }
+    let now = library::now();
+    let entry = Entry {
+        id: Library::id_for(&key),
+        key: key.clone(),
+        track: req.track,
+        source: req.source,
+        format: req.format,
+        detected: Some(detected),
+        kind: Some(lyrics.kind),
+        watch: req.watch,
+        file: String::new(),
+        added_at: now,
+        updated_at: now,
+    };
+    let entry = tokio::task::spawn_blocking(move || lib.put(entry, &text))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| format!("could not save the lyrics: {e}"))?;
+    Ok(LibraryDone::Imported {
+        identity: req.identity,
+        key,
+        resolution: Resolution {
+            candidate: crate::providers::local::entry_candidate(&entry, Some(MatchTier::Exact)),
+            lyrics,
+            manual: false,
+        },
+        temporary: false,
+        warning,
+    })
 }
 
 mod erased {

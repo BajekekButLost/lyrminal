@@ -8,6 +8,20 @@ use crate::lyrics::Lyrics;
 pub const ID: &str = "local-library";
 pub const NAME: &str = "Local library";
 
+pub fn entry_candidate(e: &Entry, tier: Option<MatchTier>) -> Candidate {
+    Candidate {
+        provider: ID.into(),
+        id: e.id.clone(),
+        title: e.track.title.clone(),
+        artists: e.track.artists.clone(),
+        album: e.track.album.clone(),
+        duration: e.track.duration,
+        tier,
+        kind_hint: e.kind,
+        note: Some(format!("{} {}", e.source.label(), e.source.name())),
+    }
+}
+
 pub struct LocalLibrary {
     client: reqwest::Client,
     library: Library,
@@ -32,17 +46,7 @@ impl LocalLibrary {
     }
 
     fn candidate(&self, q: &TrackQuery, e: &Entry) -> Candidate {
-        Candidate {
-            provider: ID.into(),
-            id: e.id.clone(),
-            title: e.track.title.clone(),
-            artists: e.track.artists.clone(),
-            album: e.track.album.clone(),
-            duration: e.track.duration,
-            tier: Some(self.tier(q, e)),
-            kind_hint: e.kind,
-            note: Some(format!("{} {}", e.source.label(), e.source.name())),
-        }
+        entry_candidate(e, Some(self.tier(q, e)))
     }
 
     fn best(&self, q: &TrackQuery) -> Option<Entry> {
