@@ -173,6 +173,8 @@ pub struct Credits {
     pub provider: String,
     #[serde(default)]
     pub provider_url: Option<String>,
+    #[serde(default)]
+    pub provider_credit: Option<String>,
     pub source: Option<String>,
     #[serde(default)]
     pub source_tag: Option<String>,

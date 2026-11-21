@@ -415,6 +415,7 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
     let credits = Credits {
         provider: NAME.into(),
         provider_url: Some("https://spicylyrics.org".into()),
+        provider_credit: None,
         source: Some(source_label(body.source.as_deref())),
         source_tag: source_tag(body.source.as_deref()),
         songwriters: body.song_writers,

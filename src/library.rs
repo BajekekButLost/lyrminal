@@ -116,6 +116,7 @@ pub fn credits(source: &Source) -> Credits {
             Source::Url(u) => Some(u.clone()),
             _ => None,
         },
+        provider_credit: None,
         source: Some(source.name()),
         source_tag: None,
         songwriters: Vec::new(),

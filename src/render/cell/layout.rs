@@ -294,7 +294,10 @@ pub fn credit_rows(credits: &Credits, width: u16, align: Align, header: bool) ->
             None,
         ));
     }
-    if !(header && provider_in_header(credits)) {
+    let mut segments: Vec<(String, Option<String>)> = Vec::new();
+    if let Some(credit) = &credits.provider_credit {
+        segments.push((credit.clone(), credits.provider_url.clone()));
+    } else if !(header && provider_in_header(credits)) {
         let mut short = credits.provider.clone();
         if let Some(src) = &credits.source {
             short.push_str(&format!(" · {src}"));
@@ -309,11 +312,12 @@ pub fn credit_rows(credits: &Credits, width: u16, align: Align, header: bool) ->
             credits.provider_url.clone(),
         ));
     }
-    let segments: Vec<(String, Option<String>)> = credits
-        .contributors
-        .iter()
-        .map(|c| (format!("{} {}", c.role, c.name), c.url.clone()))
-        .collect();
+    segments.extend(
+        credits
+            .contributors
+            .iter()
+            .map(|c| (format!("{} {}", c.role, c.name), c.url.clone())),
+    );
     if segments.is_empty() {
         return rows;
     }
@@ -614,5 +618,31 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(row_text(&rows[0]), "Lyrics provided by lrc.red");
         assert_eq!(rows[0].links[0].url, "https://lrc.red");
+    }
+
+    #[test]
+    fn unison_credit_links_the_song_and_the_submitter() {
+        let credits = Credits {
+            provider: crate::providers::unison::NAME.into(),
+            provider_url: Some("https://unison.betterlyrics.org/song/v1".into()),
+            provider_credit: Some(crate::providers::unison::CREDIT.into()),
+            contributors: vec![crate::lyrics::Contributor {
+                role: "submitted by".into(),
+                name: "boidu".into(),
+                url: Some("https://unison.betterlyrics.org/curator/k1".into()),
+            }],
+            ..Default::default()
+        };
+        for header in [true, false] {
+            let rows = credit_rows(&credits, 60, Align::Left, header);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(row_text(&rows[0]), "Lyrics from Unison · submitted by boidu");
+            assert_eq!(rows[0].links[0].url, "https://unison.betterlyrics.org/song/v1");
+            assert_eq!(rows[0].links[1].url, "https://unison.betterlyrics.org/curator/k1");
+        }
+        let narrow = credit_rows(&credits, 20, Align::Left, true);
+        assert_eq!(narrow.len(), 2);
+        assert_eq!(row_text(&narrow[0]), "Lyrics from Unison");
+        assert_eq!(row_text(&narrow[1]), "submitted by boidu");
     }
 }
