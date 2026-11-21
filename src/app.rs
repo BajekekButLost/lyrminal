@@ -329,6 +329,7 @@ impl App {
             },
             extend_lines: self.cfg.appearance.style == VisualStyle::Bloom || fade,
             join_split_words: self.cfg.lyrics.join_split_words,
+            fix_background: self.cfg.lyrics.fix_background_lines,
         }
     }
 
@@ -965,7 +966,8 @@ impl App {
             || self.cfg.appearance.fade_previous != old.appearance.fade_previous
             || self.cfg.lyrics.interludes != old.lyrics.interludes
             || self.cfg.lyrics.interlude_threshold_secs != old.lyrics.interlude_threshold_secs
-            || self.cfg.lyrics.join_split_words != old.lyrics.join_split_words;
+            || self.cfg.lyrics.join_split_words != old.lyrics.join_split_words
+            || self.cfg.lyrics.fix_background_lines != old.lyrics.fix_background_lines;
         if prep_changed {
             self.reprepare();
         } else if appearance_changed || lyrics_changed {
