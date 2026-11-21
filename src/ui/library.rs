@@ -47,14 +47,29 @@ impl Default for Form {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Library,
+    Import,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
+    Add,
+    Entry(usize),
     Temporary,
     Source,
     Location,
     Watch,
     Format,
     Import,
-    Entry(usize),
+}
+
+pub const CARD_WIDTH: usize = 30;
+pub const CARD_GAP: usize = 1;
+pub const CARD_HEIGHT: usize = 5;
+
+pub fn card_columns(width: usize) -> usize {
+    ((width + CARD_GAP) / (CARD_WIDTH + CARD_GAP)).max(1)
 }
 
 pub struct ImportRequest {
@@ -77,10 +92,12 @@ pub enum Outcome {
 
 pub struct LibraryDialog {
     pub track: Option<(TrackQuery, String)>,
+    pub view: View,
     pub form: Form,
     pub pasted: Option<String>,
     pub editing: Option<String>,
     pub selected: usize,
+    pub columns: usize,
     pub entries: Vec<Entry>,
     pub confirm_remove: Option<String>,
     pub busy: Option<String>,
@@ -94,10 +111,12 @@ impl LibraryDialog {
         sort_entries(&mut entries);
         Self {
             track,
+            view: View::Library,
             form,
             pasted: None,
             editing: None,
             selected: 0,
+            columns: 1,
             entries,
             confirm_remove: None,
             busy: None,
@@ -114,6 +133,11 @@ impl LibraryDialog {
     }
 
     pub fn rows(&self) -> Vec<Row> {
+        if self.view == View::Library {
+            let mut rows = vec![Row::Add];
+            rows.extend((0..self.entries.len()).map(Row::Entry));
+            return rows;
+        }
         let mut rows = vec![Row::Temporary, Row::Source];
         if self.form.source != SourceKind::Clipboard {
             rows.push(Row::Location);
@@ -123,17 +147,32 @@ impl LibraryDialog {
         }
         rows.push(Row::Format);
         rows.push(Row::Import);
-        rows.extend((0..self.entries.len()).map(Row::Entry));
         rows
     }
 
     pub fn group_starts(&self) -> Vec<usize> {
-        let rows = self.rows();
-        let mut starts = vec![0];
-        if let Some(i) = rows.iter().position(|r| matches!(r, Row::Entry(_))) {
-            starts.push(i);
+        match self.view {
+            View::Library if self.entries.is_empty() => vec![0],
+            View::Library => vec![0, 1],
+            View::Import => vec![0, self.rows().len() - 1],
         }
-        starts
+    }
+
+    pub fn open_import(&mut self) {
+        self.view = View::Import;
+        self.selected = 0;
+        self.editing = None;
+        self.confirm_remove = None;
+        self.error = None;
+        self.notice = None;
+    }
+
+    pub fn open_library(&mut self) {
+        self.view = View::Library;
+        self.selected = 0;
+        self.editing = None;
+        self.error = None;
+        self.notice = None;
     }
 
     pub fn current(&self) -> Option<Row> {
@@ -313,14 +352,19 @@ pub fn handle_key(d: &mut LibraryDialog, key: KeyEvent) -> Outcome {
     let rows = d.rows();
     d.selected = d.selected.min(rows.len().saturating_sub(1));
     let row = rows[d.selected];
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => return Outcome::Close,
-        KeyCode::Tab | KeyCode::BackTab => {
-            let dir = if key.code == KeyCode::Tab { 1 } else { -1 };
-            if let Some(i) = crate::ui::jump_group(&d.group_starts(), d.selected, dir) {
-                d.selected = i;
-            }
+    if let KeyCode::Tab | KeyCode::BackTab = key.code {
+        let dir = if key.code == KeyCode::Tab { 1 } else { -1 };
+        if let Some(i) = crate::ui::jump_group(&d.group_starts(), d.selected, dir) {
+            d.selected = i;
         }
+        return Outcome::None;
+    }
+    if d.view == View::Library {
+        return library_key(d, key, row);
+    }
+    match key.code {
+        KeyCode::Char('L') => return Outcome::Close,
+        KeyCode::Esc | KeyCode::Char('q') => d.open_library(),
         KeyCode::Down | KeyCode::Char('j') => d.selected = (d.selected + 1).min(rows.len() - 1),
         KeyCode::Up | KeyCode::Char('k') => d.selected = d.selected.saturating_sub(1),
         KeyCode::Home | KeyCode::Char('g') => d.selected = 0,
@@ -343,20 +387,52 @@ pub fn handle_key(d: &mut LibraryDialog, key: KeyEvent) -> Outcome {
                     return Outcome::Import(req);
                 }
             }
+            other => {
+                change(d, other, 1);
+            }
+        },
+        KeyCode::Delete | KeyCode::Backspace if row == Row::Location => d.set_location(String::new()),
+        _ => {}
+    }
+    Outcome::None
+}
+
+fn library_key(d: &mut LibraryDialog, key: KeyEvent, row: Row) -> Outcome {
+    let n = d.entries.len();
+    let cols = d.columns.max(1);
+    let card = d.selected.checked_sub(1);
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => return Outcome::Close,
+        KeyCode::Char('i') => d.open_import(),
+        KeyCode::Down | KeyCode::Char('j') => match card {
+            None if n > 0 => d.selected = 1,
+            Some(c) if c + cols < n => d.selected += cols,
+            Some(c) if c / cols < (n - 1) / cols => d.selected = n,
+            _ => {}
+        },
+        KeyCode::Up | KeyCode::Char('k') => {
+            if let Some(c) = card {
+                d.selected = if c >= cols { d.selected - cols } else { 0 };
+            }
+        }
+        KeyCode::Left | KeyCode::Char('h') => d.selected = d.selected.saturating_sub(1),
+        KeyCode::Right | KeyCode::Char('l') => d.selected = (d.selected + 1).min(n),
+        KeyCode::Home | KeyCode::Char('g') => d.selected = 0,
+        KeyCode::End | KeyCode::Char('G') => d.selected = n,
+        KeyCode::Enter | KeyCode::Char(' ') => match row {
+            Row::Add => d.open_import(),
             Row::Entry(i) => {
                 if let Some(e) = d.entries.get(i) {
                     return Outcome::Apply(e.clone());
                 }
             }
-            other => {
-                change(d, other, 1);
-            }
-        },
-        KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => match row {
-            Row::Entry(i) => d.confirm_remove = d.entries.get(i).map(|e| e.id.clone()),
-            Row::Location if key.code != KeyCode::Char('d') => d.set_location(String::new()),
             _ => {}
         },
+        KeyCode::Char('d') | KeyCode::Delete | KeyCode::Backspace => {
+            if let Row::Entry(i) = row {
+                d.confirm_remove = d.entries.get(i).map(|e| e.id.clone());
+            }
+        }
         _ => {}
     }
     Outcome::None
@@ -366,6 +442,12 @@ pub fn paste(d: &mut LibraryDialog, text: &str) {
     if let Some(buf) = d.editing.as_mut() {
         buf.push_str(text.trim_matches(['\n', '\r']));
         return;
+    }
+    if d.view == View::Library {
+        if text.trim().is_empty() {
+            return;
+        }
+        d.open_import();
     }
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -410,7 +492,57 @@ mod tests {
             artists: vec!["Artist".into()],
             ..Default::default()
         };
-        LibraryDialog::new(Some((q, "id".into())), Form::default(), Vec::new(), 1)
+        let mut d = LibraryDialog::new(Some((q, "id".into())), Form::default(), Vec::new(), 1);
+        d.open_import();
+        d
+    }
+
+    fn saved(title: &str) -> Entry {
+        Entry {
+            id: title.into(),
+            key: title.into(),
+            track: TrackQuery {
+                title: title.into(),
+                ..Default::default()
+            },
+            source: Source::Clipboard,
+            format: None,
+            detected: None,
+            kind: None,
+            watch: false,
+            file: String::new(),
+            added_at: 1,
+            updated_at: 1,
+        }
+    }
+
+    #[test]
+    fn opens_on_the_library_and_imports_on_demand() {
+        let entries = ["a", "b", "c", "d", "e"].map(saved).to_vec();
+        let mut d = LibraryDialog::new(None, Form::default(), entries, 1);
+        d.columns = 3;
+        assert_eq!(d.view, View::Library);
+        assert_eq!(d.current(), Some(Row::Add));
+        handle_key(&mut d, key(KeyCode::Down));
+        assert_eq!(d.current(), Some(Row::Entry(0)));
+        handle_key(&mut d, key(KeyCode::Down));
+        assert_eq!(d.current(), Some(Row::Entry(3)));
+        handle_key(&mut d, key(KeyCode::Right));
+        handle_key(&mut d, key(KeyCode::Up));
+        assert_eq!(d.current(), Some(Row::Entry(1)));
+        handle_key(&mut d, key(KeyCode::Right));
+        handle_key(&mut d, key(KeyCode::Down));
+        assert_eq!(d.current(), Some(Row::Entry(4)));
+        handle_key(&mut d, key(KeyCode::BackTab));
+        assert_eq!(d.current(), Some(Row::Add));
+        handle_key(&mut d, key(KeyCode::Char('i')));
+        assert_eq!(d.view, View::Import);
+        assert_eq!(d.current(), Some(Row::Temporary));
+        handle_key(&mut d, key(KeyCode::Tab));
+        assert_eq!(d.current(), Some(Row::Import));
+        assert!(matches!(handle_key(&mut d, key(KeyCode::Esc)), Outcome::None));
+        assert_eq!(d.view, View::Library);
+        assert!(matches!(handle_key(&mut d, key(KeyCode::Esc)), Outcome::Close));
     }
 
     #[test]

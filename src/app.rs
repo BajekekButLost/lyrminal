@@ -712,6 +712,7 @@ impl App {
                 return;
             }
             Overlay::Library(dialog) => {
+                dialog.columns = self.ui.columns.max(1);
                 match library_ui::handle_key(dialog, key) {
                     library_ui::Outcome::None => {}
                     library_ui::Outcome::Close => self.close_library(),
@@ -884,6 +885,10 @@ impl App {
                     d.selected = i;
                     same.then_some(KeyCode::Enter)
                 }
+            }
+            (Overlay::Library(d), Some(Target::Back)) => {
+                d.open_library();
+                None
             }
             (Overlay::Library(_), Some(Target::Decrease)) => Some(KeyCode::Left),
             (Overlay::Library(_), Some(Target::Increase)) => Some(KeyCode::Right),
