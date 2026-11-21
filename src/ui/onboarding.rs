@@ -439,7 +439,7 @@ fn intro(step: Step, app: &App, side: bool) -> String {
     let place = if side { "on the right" } else { "below" };
     match step {
         Step::Player => "Lyrminal shows synced lyrics for whatever your music player is playing. It finds players through MPRIS, so open Spotify, spotifast, a browser or any other MPRIS player and it shows up here.".into(),
-        Step::Providers => "Lyrics come from the first provider in this list that has them. lrc.red, Better Lyrics and LRCLIB work without any setup.".into(),
+        Step::Providers => "Lyrics come from the first provider in this list that has them. lrc.red, Better Lyrics, lrcmux and LRCLIB work without any setup.".into(),
         Step::Library => "Lyrminal can also use sync files you keep yourself, such as LRC, TTML or SRT, from its local library. Do you store syncs for your songs?".into(),
         Step::Song => format!("Play a song in {}. Lyrminal looks it up and the lyrics appear {place}.", player_name(app)),
         Step::Customize => format!("Try the main looks while the song plays; the lyrics {place} change as you go. ←→ changes the selected setting."),
