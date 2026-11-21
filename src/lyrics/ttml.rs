@@ -282,16 +282,63 @@ fn apply_roman(group: &mut [Syllable], raws: &[String]) -> bool {
     true
 }
 
-fn wrap_parens(g: &mut VocalGroup) {
-    if let Some(first) = g.syllables.first_mut()
-        && !first.text.starts_with(['(', '（'])
-    {
-        first.text.insert(0, '(');
+const OPEN: [char; 2] = ['(', '（'];
+const CLOSE: [char; 2] = [')', '）'];
+
+fn paren_edges(s: &str) -> (bool, bool) {
+    let s = s.trim();
+    let opens = s.starts_with(OPEN);
+    let closes = s.ends_with(CLOSE);
+    if opens && closes && s.chars().count() >= 2 {
+        let inner: Vec<char> = s.chars().skip(1).collect();
+        let mut depth = 0i32;
+        let balanced = inner[..inner.len() - 1].iter().all(|c| {
+            if OPEN.contains(c) {
+                depth += 1;
+            } else if CLOSE.contains(c) {
+                depth -= 1;
+            }
+            depth >= 0
+        }) && depth == 0;
+        return (balanced, balanced);
     }
-    if let Some(last) = g.syllables.last_mut()
-        && !last.text.ends_with([')', '）'])
-    {
-        last.text.push(')');
+    (opens && !s.contains(CLOSE), closes && !s.contains(OPEN))
+}
+
+fn strip_edges(s: &mut String, start: bool, end: bool) {
+    let mut t = s.trim();
+    if start {
+        t = t.strip_prefix(OPEN).unwrap_or(t).trim_start();
+    }
+    if end {
+        t = t.strip_suffix(CLOSE).unwrap_or(t).trim_end();
+    }
+    *s = t.to_string();
+}
+
+fn strip_parens(g: &mut VocalGroup) {
+    let joined: String = g.syllables.iter().map(|s| s.text.as_str()).collect();
+    let (start, end) = paren_edges(&joined);
+    if let Some(first) = g.syllables.first_mut() {
+        strip_edges(&mut first.text, start, false);
+    }
+    if let Some(last) = g.syllables.last_mut() {
+        strip_edges(&mut last.text, false, end);
+    }
+    g.syllables.retain(|s| !s.text.is_empty());
+    if g.syllables.iter().all(|s| s.roman.is_some()) {
+        let joined: String = g.syllables.iter().filter_map(|s| s.roman.as_deref()).collect();
+        let (start, end) = paren_edges(&joined);
+        if let Some(r) = g.syllables.first_mut().and_then(|s| s.roman.as_mut()) {
+            strip_edges(r, start, false);
+        }
+        if let Some(r) = g.syllables.last_mut().and_then(|s| s.roman.as_mut()) {
+            strip_edges(r, false, end);
+        }
+    }
+    for text in [&mut g.roman, &mut g.translation].into_iter().flatten() {
+        let (start, end) = paren_edges(text);
+        strip_edges(text, start, end);
     }
 }
 
@@ -664,7 +711,6 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
                 let Some(t) = non_empty(&b.text) else { continue };
                 VocalGroup::single(t, line_start, line_end)
             };
-            wrap_parens(&mut g);
             let first = i == 0;
             g.translation = b
                 .translation
@@ -674,6 +720,10 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
                 && head_ro.is_some_and(|r| r.timed && apply_roman(&mut g.syllables, &r.bg_syllables));
             if !timed_bg_roman {
                 g.roman = b.roman.or_else(|| head_ro.filter(|_| first).and_then(|r| non_empty(&r.bg)));
+            }
+            strip_parens(&mut g);
+            if g.syllables.is_empty() {
+                continue;
             }
             background.push(g);
         }
@@ -734,7 +784,7 @@ mod tests {
         let first = &l.lines[0];
         assert_eq!(first.lead.text(), "rock& roll");
         assert_eq!(first.background.len(), 1);
-        assert_eq!(first.background[0].text(), "(ohh)");
+        assert_eq!(first.background[0].text(), "ohh");
         assert!(!first.opposite);
         assert!(l.lines[1].opposite);
         assert_eq!(l.credits.songwriters, vec!["Writer One".to_string()]);
@@ -750,7 +800,7 @@ mod tests {
         assert!(first.background_only);
         assert!(first.opposite);
         assert!(first.background.is_empty());
-        assert_eq!(first.lead.text(), "(ah ah)");
+        assert_eq!(first.lead.text(), "ah ah");
         assert!((first.start - 0.4).abs() < 1e-9);
         assert_eq!(first.lead.syllables.len(), 2);
     }
@@ -846,7 +896,7 @@ mod tests {
         assert_eq!(first.lead.translation.as_deref(), Some("Inline translation"));
         assert_eq!(first.lead.roman.as_deref(), Some("kimi no"));
         assert_eq!(first.background.len(), 1);
-        assert_eq!(first.background[0].text(), "(秘密)");
+        assert_eq!(first.background[0].text(), "秘密");
         assert_eq!(first.background[0].translation.as_deref(), Some("a secret"));
         assert_eq!(first.background[0].roman.as_deref(), Some("himitsu"));
         let second = &l.lines[1];
@@ -856,7 +906,7 @@ mod tests {
         assert_eq!(romans, ["ta", "da", "hitori"]);
         assert!(second.lead.syllables[0].roman_part_of_word);
         assert!(!second.lead.syllables[1].roman_part_of_word);
-        assert_eq!(second.background[0].translation.as_deref(), Some("(bg translation)"));
+        assert_eq!(second.background[0].translation.as_deref(), Some("bg translation"));
         assert_eq!(second.background[0].syllables[0].roman.as_deref(), Some("himitsu"));
         assert_eq!(l.credits.contributors.len(), 1);
         assert_eq!(l.credits.contributors[0].url.as_deref(), Some("https://github.com/someone"));
@@ -874,8 +924,31 @@ mod tests {
         assert_eq!(l.lines.len(), 2);
         assert_eq!(l.lines[0].lead.text(), "A line of lyrics");
         assert_eq!(l.lines[0].lead.translation.as_deref(), Some("Eine Zeile"));
-        assert_eq!(l.lines[0].background[0].text(), "(echo)");
+        assert_eq!(l.lines[0].background[0].text(), "echo");
         assert!(l.lines[1].background_only);
-        assert_eq!(l.lines[1].lead.text(), "(only bg)");
+        assert_eq!(l.lines[1].lead.text(), "only bg");
+    }
+
+    #[test]
+    fn strips_parentheses_around_background_vocals() {
+        let doc = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3.org/ns/ttml#metadata" xmlns:itunes="http://music.apple.com/lyric-ttml-internal" itunes:timing="Word"><head><metadata><ttm:agent type="person" xml:id="v1"/></metadata></head><body><div><p begin="00:14.300" end="00:17.795" ttm:agent="v1" itunes:key="L1"><span begin="00:14.300" end="00:14.500">Cribs</span> <span begin="00:14.500" end="00:16.000">overseas</span><span ttm:role="x-bg" begin="00:16.885" end="00:17.795"><span begin="00:16.885" end="00:17.020">(For</span> <span begin="00:17.020" end="00:17.175">cribs</span> <span begin="00:17.175" end="00:17.315">o</span><span begin="00:17.315" end="00:17.461">ver</span><span begin="00:17.461" end="00:17.795">seas)</span></span></p><p begin="01:35.000" end="01:36.000" ttm:agent="v1" itunes:key="L2"><span begin="01:35.000" end="01:35.500">Yeah</span><span ttm:role="x-bg"><span begin="01:35.532" end="01:35.744">(Oh)</span> <span begin="01:35.800" end="01:35.900">(yeah)</span></span></p><p begin="02:00.000" end="02:01.000" ttm:agent="v1" itunes:key="L3"><span begin="02:00.000" end="02:00.500">Go</span><span ttm:role="x-bg"><span begin="02:00.500" end="02:00.600">(</span><span begin="02:00.600" end="02:01.000">go)</span></span></p></div></body></tt>"#;
+        let l = parse(doc, Credits::default()).unwrap();
+        assert_eq!(l.lines[0].lead.text(), "Cribs overseas");
+        assert_eq!(l.lines[0].background[0].text(), "For cribs overseas");
+        assert_eq!(l.lines[0].background[0].syllables.len(), 5);
+        assert_eq!(l.lines[1].background[0].text(), "(Oh) (yeah)");
+        assert_eq!(l.lines[2].background[0].text(), "go");
+        assert_eq!(l.lines[2].background[0].syllables.len(), 1);
+    }
+
+    #[test]
+    fn finds_wrapping_parentheses() {
+        assert_eq!(paren_edges("(For cribs overseas)"), (true, true));
+        assert_eq!(paren_edges("(a (b) c)"), (true, true));
+        assert_eq!(paren_edges("(Oh) (yeah)"), (false, false));
+        assert_eq!(paren_edges("（ひみつ）"), (true, true));
+        assert_eq!(paren_edges("(still going"), (true, false));
+        assert_eq!(paren_edges("ending)"), (false, true));
+        assert_eq!(paren_edges("plain"), (false, false));
     }
 }
