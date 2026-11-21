@@ -5,17 +5,44 @@ use quick_xml::events::{BytesStart, Event};
 
 use super::{Credits, LyricLine, Lyrics, Syllable, SyncKind, VocalGroup};
 
-pub fn parse_time(s: &str) -> Option<f64> {
-    let s = s.trim();
-    if let Some(ms) = s.strip_suffix("ms") {
-        return ms.trim().parse::<f64>().ok().map(|v| v / 1000.0);
+#[derive(Clone, Copy)]
+struct Rates {
+    frame: f64,
+    tick: f64,
+}
+
+impl Default for Rates {
+    fn default() -> Self {
+        Self { frame: 30.0, tick: 1.0 }
     }
-    if let Some(sec) = s.strip_suffix('s') {
-        return sec.trim().parse::<f64>().ok();
+}
+
+#[cfg(test)]
+fn parse_time(s: &str) -> Option<f64> {
+    parse_time_with(s, Rates::default())
+}
+
+fn parse_time_with(s: &str, rates: Rates) -> Option<f64> {
+    let s = s.trim();
+    let num = |v: &str| v.trim().parse::<f64>().ok();
+    if let Some(v) = s.strip_suffix("ms") {
+        return num(v).map(|v| v / 1000.0);
+    }
+    if !s.contains(':') {
+        for (suffix, scale) in [("h", 3600.0), ("m", 60.0), ("s", 1.0), ("f", 1.0 / rates.frame), ("t", 1.0 / rates.tick)] {
+            if let Some(v) = s.strip_suffix(suffix) {
+                return num(v).map(|v| v * scale);
+            }
+        }
+    }
+    let parts: Vec<&str> = s.split(':').collect();
+    if parts.len() == 4 {
+        let frames = num(parts[3])?;
+        return Some(num(parts[0])? * 3600.0 + num(parts[1])? * 60.0 + num(parts[2])? + frames / rates.frame);
     }
     let mut total = 0.0;
-    for part in s.split(':') {
-        total = total * 60.0 + part.trim().parse::<f64>().ok()?;
+    for part in parts {
+        total = total * 60.0 + num(part)?;
     }
     Some(total)
 }
@@ -86,6 +113,14 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
     let mut line: Option<LineBuild> = None;
     let mut spans: Vec<Span> = Vec::new();
     let mut built: Vec<LineBuild> = Vec::new();
+    let mut rates = Rates::default();
+    let span_times = |e: &BytesStart, rates: Rates| {
+        let begin = attr(e, "begin").and_then(|t| parse_time_with(&t, rates));
+        let end = attr(e, "end")
+            .and_then(|t| parse_time_with(&t, rates))
+            .or_else(|| Some(begin? + attr(e, "dur").and_then(|t| parse_time_with(&t, rates))?));
+        (begin, end)
+    };
 
     let push_text = |text: &str, line: &mut Option<LineBuild>, spans: &mut Vec<Span>| {
         let Some(l) = line.as_mut() else { return };
@@ -122,7 +157,18 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
                             _ => None,
                         });
                         language = attr(&e, "lang");
+                        let frame = attr(&e, "frameRate").and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| *v > 0.0);
+                        let multiplier = attr(&e, "frameRateMultiplier").and_then(|v| {
+                            let (a, b) = v.trim().split_once(char::is_whitespace)?;
+                            Some(a.trim().parse::<f64>().ok()? / b.trim().parse::<f64>().ok()?)
+                        });
+                        rates.frame = frame.unwrap_or(30.0) * multiplier.filter(|m| *m > 0.0).unwrap_or(1.0);
+                        rates.tick = attr(&e, "tickRate")
+                            .and_then(|v| v.trim().parse::<f64>().ok())
+                            .filter(|v| *v > 0.0)
+                            .unwrap_or(if frame.is_some() { rates.frame } else { 1.0 });
                     }
+                    "br" if line.is_some() => push_text(" ", &mut line, &mut spans),
                     "agent" => {
                         if let Some(id) = attr(&e, "id") {
                             agents.push((id, attr(&e, "type").unwrap_or_default()));
@@ -145,8 +191,9 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
                         }
                     }
                     "p" => {
-                        let begin = attr(&e, "begin").and_then(|t| parse_time(&t)).unwrap_or(0.0);
-                        let end = attr(&e, "end").and_then(|t| parse_time(&t)).unwrap_or(begin);
+                        let (begin, end) = span_times(&e, rates);
+                        let begin = begin.unwrap_or(0.0);
+                        let end = end.unwrap_or(begin);
                         line = Some(LineBuild {
                             begin,
                             end,
@@ -162,8 +209,8 @@ pub fn parse(doc: &str, credits: Credits) -> Option<Lyrics> {
                                 l.background.push(Vec::new());
                             }
                             spans.push(Span::Background);
-                        } else if let Some(begin) = attr(&e, "begin").and_then(|t| parse_time(&t)) {
-                            let end = attr(&e, "end").and_then(|t| parse_time(&t)).unwrap_or(begin);
+                        } else if let (Some(begin), end) = span_times(&e, rates) {
+                            let end = end.unwrap_or(begin);
                             spans.push(Span::Syllable {
                                 begin,
                                 end,
@@ -438,5 +485,19 @@ mod tests {
         assert_eq!(parse_time("00:01:02.500"), Some(62.5));
         assert_eq!(parse_time("2838ms"), Some(2.838));
         assert_eq!(parse_time("2.5s"), Some(2.5));
+        assert_eq!(parse_time("00:00:01:15"), Some(1.5));
+        assert_eq!(parse_time("1.5m"), Some(90.0));
+    }
+
+    #[test]
+    fn parses_subtitle_ttml() {
+        let doc = r#"<?xml version="1.0"?><tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:tickRate="10000000"><body><div><p begin="10000000t" end="25000000t">first<br/>line</p><p begin="3s" dur="1s"><span style="s1">second</span></p></div></body></tt>"#;
+        let l = parse(doc, Credits::default()).unwrap();
+        assert_eq!(l.kind, SyncKind::Line);
+        assert_eq!(l.lines.len(), 2);
+        assert_eq!(l.lines[0].lead.text(), "first line");
+        assert!((l.lines[0].start - 1.0).abs() < 1e-9);
+        assert!((l.lines[0].end - 2.5).abs() < 1e-9);
+        assert!((l.lines[1].end - 4.0).abs() < 1e-9);
     }
 }
