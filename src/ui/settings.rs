@@ -41,6 +41,7 @@ pub enum Kind {
         set: fn(&mut Config, String),
         secret: bool,
         placeholder: &'static str,
+        folder: bool,
     },
     Provider(String),
     Preset,
@@ -71,6 +72,25 @@ fn tolerance_desc() -> &'static str {
     "How far a search result's length may differ from the playing track and still count as the same recording."
 }
 
+pub const DEFAULT_LIBRARY_LABEL: &str = "Default sync library location";
+
+pub fn default_library_item() -> Item {
+    item(
+        DEFAULT_LIBRARY_LABEL,
+        "The folder where you keep your sync files. Importing from a file starts there, so you only type the file name. Enter to edit, Tab completes folders, Ctrl-U clears.",
+        Kind::Text {
+            get: |c| c.providers.local_library.default_dir.clone(),
+            set: |c, v| {
+                let v = v.trim();
+                c.providers.local_library.default_dir = if v == "/" { v.to_string() } else { v.trim_end_matches('/').to_string() };
+            },
+            secret: false,
+            placeholder: "~/Music/syncs",
+            folder: true,
+        },
+    )
+}
+
 pub fn provider_page(id: &str) -> Vec<Item> {
     match id {
         crate::providers::local::ID => vec![
@@ -82,6 +102,7 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::local::ID, v),
                 },
             ),
+            default_library_item(),
             item(
                 "Duration tolerance",
                 "Lyrics saved for another copy of a song, such as the same track in a different player, are used when the title and artist match and the length differs by at most this much.",
@@ -128,6 +149,7 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.spicy_lyrics.api_key = v.trim().to_string(),
                     secret: true,
                     placeholder: "sl_sk_…",
+                    folder: false,
                 },
             ),
             item(
@@ -249,6 +271,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                         set: |c, v| c.player.target = v.trim().to_string(),
                         secret: false,
                         placeholder: "spotifast",
+                        folder: false,
                     },
                 ),
                 item(
@@ -270,6 +293,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                         },
                         secret: false,
                         placeholder: "spotifast, spotify",
+                        folder: false,
                     },
                 ),
                 item(
@@ -480,6 +504,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                         set: |c, v| c.appearance.font_family = v.trim().to_string(),
                         secret: false,
                         placeholder: "sans-serif",
+                        folder: false,
                     },
                 ),
                 item(
@@ -984,6 +1009,11 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
                     return SettingsOutcome::Changed;
                 }
             }
+            KeyCode::Tab if matches!(current.kind, Kind::Text { folder: true, .. }) => {
+                if let Some(done) = crate::ui::library::complete_path(buf, true) {
+                    *buf = done;
+                }
+            }
             KeyCode::Backspace => {
                 buf.pop();
             }
@@ -1155,6 +1185,28 @@ mod tests {
         let mut cfg = Config::default();
         cfg.providers.order = vec!["lrclib".into(), "spicy-lyrics".into(), "lrc-red".into()];
         assert_eq!(ordered_ids(&cfg), vec!["local-library", "lrclib", "spicy-lyrics", "lrc-red"]);
+    }
+
+    #[test]
+    fn sets_the_default_library_folder_with_completion() {
+        let dir = std::env::temp_dir().join(format!("lyrminal-syncdir-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("my-syncs")).unwrap();
+        std::fs::write(dir.join("my-song.lrc"), "").unwrap();
+        let mut cfg = Config::default();
+        let mut st = SettingsState::new();
+        handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(st.page.as_deref(), Some(crate::providers::local::ID));
+        st.item = 1;
+        assert_eq!(st.items(&cfg)[1].label, DEFAULT_LIBRARY_LABEL);
+        handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
+        paste(&mut st, &format!("{}/my", dir.display()));
+        handle_key(&mut st, &mut cfg, key(KeyCode::Tab, KeyModifiers::NONE));
+        let out = handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert!(matches!(out, SettingsOutcome::Changed));
+        let want = format!("{}/my-syncs", dir.display());
+        assert_eq!(cfg.providers.local_library.default_dir, want);
+        assert_eq!(cfg.providers.local_library.import_start(), Some(format!("{want}/")));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

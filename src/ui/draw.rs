@@ -691,6 +691,8 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
             settings::SettingsAction::Onboarding => "start the welcome tour",
         };
         format!("Press y or click it again to {what}, any other key to cancel.")
+    } else if state.editing.is_some() && items.get(selected).is_some_and(|i| matches!(i.kind, Kind::Text { folder: true, .. })) {
+        "Type or paste a folder, Tab to complete it, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
     } else if state.editing.is_some() {
         "Type or paste, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
     } else {
@@ -886,7 +888,8 @@ fn library_desc(app: &App, d: &LibraryDialog, row: Option<LibRow>) -> String {
         Some(LibRow::Temporary) => "Yes: show the lyrics now without saving them; they are forgotten when the song changes or Lyrminal closes. No: save them in the local library for this song.".into(),
         Some(LibRow::Source) => "Where to load the lyrics from: a file on this computer, the system clipboard (or text pasted into this dialog with your terminal), or a web address.".into(),
         Some(LibRow::Location) if d.form.source == SourceKind::Url => "An http:// or https:// address that returns a lyrics file. Enter to edit.".into(),
-        Some(LibRow::Location) => "Path to the lyrics file; ~ is your home folder. Enter to edit, Tab completes while editing.".into(),
+        Some(LibRow::Location) if d.start_dir.is_some() => "Path to the lyrics file, starting in your default sync library location. Enter to edit, Tab completes while editing.".into(),
+        Some(LibRow::Location) => "Path to the lyrics file; ~ is your home folder. Enter to edit, Tab completes while editing. Set a default folder in Settings → Providers → Local library.".into(),
         Some(LibRow::Watch) => format!(
             "Yes: read the {} again every time these lyrics load, so later edits show up; the saved copy is used when it can't be read. No: keep the lyrics as they are now, saved in {}.",
             if d.form.source == SourceKind::Url { "URL" } else { "file" },

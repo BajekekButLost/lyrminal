@@ -116,7 +116,7 @@ impl MatchTier {
 pub struct ProvidersConfig {
     pub order: Vec<String>,
     pub disabled: Vec<String>,
-    pub local_library: SearchProviderConfig,
+    pub local_library: LocalLibraryConfig,
     pub spicy_lyrics: SpicyConfig,
     pub lrc_red: SearchProviderConfig,
     pub lrclib: SearchProviderConfig,
@@ -128,7 +128,7 @@ impl Default for ProvidersConfig {
         Self {
             order: vec!["local-library".into(), "spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()],
             disabled: Vec::new(),
-            local_library: SearchProviderConfig::default(),
+            local_library: LocalLibraryConfig::default(),
             spicy_lyrics: SpicyConfig::default(),
             lrc_red: SearchProviderConfig::default(),
             lrclib: SearchProviderConfig::default(),
@@ -148,6 +148,32 @@ impl Default for SearchProviderConfig {
         Self {
             duration_tolerance_secs: 2.0,
         }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct LocalLibraryConfig {
+    pub duration_tolerance_secs: f64,
+    pub default_dir: String,
+}
+
+impl Default for LocalLibraryConfig {
+    fn default() -> Self {
+        Self {
+            duration_tolerance_secs: 2.0,
+            default_dir: String::new(),
+        }
+    }
+}
+
+impl LocalLibraryConfig {
+    pub fn import_start(&self) -> Option<String> {
+        let dir = self.default_dir.trim();
+        if dir.is_empty() || !crate::library::expand_path(dir).is_dir() {
+            return None;
+        }
+        Some(format!("{}/", dir.trim_end_matches('/')))
     }
 }
 
