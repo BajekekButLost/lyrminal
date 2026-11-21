@@ -107,12 +107,12 @@ pub struct LibraryDialog {
 }
 
 impl LibraryDialog {
-    pub fn new(track: Option<(TrackQuery, String)>, form: Form, mut entries: Vec<Entry>, seq: u64) -> Self {
+    pub fn new(track: Option<(TrackQuery, String)>, mut entries: Vec<Entry>, seq: u64) -> Self {
         sort_entries(&mut entries);
         Self {
             track,
             view: View::Library,
-            form,
+            form: Form::default(),
             pasted: None,
             editing: None,
             selected: 0,
@@ -159,6 +159,8 @@ impl LibraryDialog {
     }
 
     pub fn open_import(&mut self) {
+        self.form = Form::default();
+        self.pasted = None;
         self.view = View::Import;
         self.selected = 0;
         self.editing = None;
@@ -492,7 +494,7 @@ mod tests {
             artists: vec!["Artist".into()],
             ..Default::default()
         };
-        let mut d = LibraryDialog::new(Some((q, "id".into())), Form::default(), Vec::new(), 1);
+        let mut d = LibraryDialog::new(Some((q, "id".into())), Vec::new(), 1);
         d.open_import();
         d
     }
@@ -519,7 +521,7 @@ mod tests {
     #[test]
     fn opens_on_the_library_and_imports_on_demand() {
         let entries = ["a", "b", "c", "d", "e"].map(saved).to_vec();
-        let mut d = LibraryDialog::new(None, Form::default(), entries, 1);
+        let mut d = LibraryDialog::new(None, entries, 1);
         d.columns = 3;
         assert_eq!(d.view, View::Library);
         assert_eq!(d.current(), Some(Row::Add));
@@ -543,6 +545,20 @@ mod tests {
         assert!(matches!(handle_key(&mut d, key(KeyCode::Esc)), Outcome::None));
         assert_eq!(d.view, View::Library);
         assert!(matches!(handle_key(&mut d, key(KeyCode::Esc)), Outcome::Close));
+    }
+
+    #[test]
+    fn every_import_starts_with_a_fresh_form() {
+        let mut d = dialog();
+        handle_key(&mut d, key(KeyCode::Enter));
+        paste(&mut d, "https://example.com/x.lrc");
+        assert!(d.form.temporary);
+        handle_key(&mut d, key(KeyCode::Esc));
+        handle_key(&mut d, key(KeyCode::Char('i')));
+        assert!(!d.form.temporary);
+        assert_eq!(d.form.source, SourceKind::File);
+        assert!(d.form.url.is_empty());
+        assert!(d.pasted.is_none());
     }
 
     #[test]

@@ -150,7 +150,6 @@ pub struct App {
     pub cache: Cache,
     pub library: Library,
     pub temporary: Option<(String, Resolution)>,
-    library_form: library_ui::Form,
     library_seq: u64,
     player_tx: UnboundedSender<PlayerCommand>,
     msg_tx: UnboundedSender<AppMsg>,
@@ -211,7 +210,6 @@ impl App {
             cache,
             library: Library::default(),
             temporary: None,
-            library_form: library_ui::Form::default(),
             library_seq: 0,
             player_tx,
             msg_tx,
@@ -1030,13 +1028,10 @@ impl App {
             .map(|t| (t.query(), t.identity_key()));
         self.library_seq += 1;
         let entries = self.library.entries();
-        self.overlay = Overlay::Library(LibraryDialog::new(track, self.library_form.clone(), entries, self.library_seq));
+        self.overlay = Overlay::Library(LibraryDialog::new(track, entries, self.library_seq));
     }
 
     fn close_library(&mut self) {
-        if let Overlay::Library(d) = &self.overlay {
-            self.library_form = d.form.clone();
-        }
         self.overlay = Overlay::None;
     }
 
