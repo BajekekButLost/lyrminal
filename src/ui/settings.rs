@@ -102,6 +102,14 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::local::ID, v),
                 },
             ),
+            item(
+                "Prioritize local library",
+                "When a saved sync clearly matches the playing song, use it over the providers below the local library in the priority list, even if they have a better sync. Providers above it still win when they have a better sync.",
+                Kind::Toggle {
+                    get: |c| c.providers.local_library.prioritize,
+                    set: |c, v| c.providers.local_library.prioritize = v,
+                },
+            ),
             default_library_item(),
             item(
                 "Duration tolerance",

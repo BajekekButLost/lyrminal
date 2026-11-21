@@ -156,6 +156,7 @@ impl Default for SearchProviderConfig {
 pub struct LocalLibraryConfig {
     pub duration_tolerance_secs: f64,
     pub default_dir: String,
+    pub prioritize: bool,
 }
 
 impl Default for LocalLibraryConfig {
@@ -163,6 +164,7 @@ impl Default for LocalLibraryConfig {
         Self {
             duration_tolerance_secs: 2.0,
             default_dir: String::new(),
+            prioritize: true,
         }
     }
 }
