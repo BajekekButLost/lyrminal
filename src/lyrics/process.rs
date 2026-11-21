@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use super::{Lyrics, Syllable, SyncKind, VocalGroup};
+use super::{background, Lyrics, Syllable, SyncKind, VocalGroup};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum State {
@@ -46,6 +46,7 @@ pub struct PrepareOptions {
     pub interlude_threshold: f64,
     pub extend_lines: bool,
     pub join_split_words: bool,
+    pub fix_background: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +162,9 @@ fn join_group(group: &mut VocalGroup) {
 
 pub fn prepare(source: &Lyrics, opts: PrepareOptions) -> Prepared {
     let mut lyrics = source.clone();
+    if opts.fix_background {
+        background::split_background(&mut lyrics);
+    }
     lyrics.sort();
     if opts.join_split_words && lyrics.kind == SyncKind::Syllable {
         for line in &mut lyrics.lines {
@@ -279,6 +283,7 @@ mod tests {
             interlude_threshold: 3.0,
             extend_lines: false,
             join_split_words: false,
+            fix_background: false,
         }
     }
 
