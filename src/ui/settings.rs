@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::{
@@ -828,6 +830,27 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                         set: |c, v| c.controls.seek_step_secs = v as u32,
                     },
                 ),
+                item(
+                    "Remember settings position",
+                    "Reopening settings soon after closing them lands on the same tab and setting you left. Off always starts at the top.",
+                    Kind::Toggle {
+                        get: |c| c.controls.remember_settings,
+                        set: |c, v| c.controls.remember_settings = v,
+                    },
+                ),
+                item(
+                    "Remember position for",
+                    "How long after closing settings they reopen where you left them.",
+                    Kind::Number {
+                        min: 5.0,
+                        max: 600.0,
+                        step: 5.0,
+                        decimals: 0,
+                        unit: "s",
+                        get: |c| c.controls.remember_settings_secs as f64,
+                        set: |c, v| c.controls.remember_settings_secs = v as u32,
+                    },
+                ),
             ],
         },
         Section {
@@ -998,6 +1021,18 @@ impl SettingsState {
             page: None,
             editing: None,
             confirm: None,
+        }
+    }
+
+    pub fn reopen(left: Option<(SettingsState, Instant)>, cfg: &Config, now: Instant) -> Self {
+        let window = Duration::from_secs(cfg.controls.remember_settings_secs as u64);
+        match left {
+            Some((state, at)) if cfg.controls.remember_settings && now.saturating_duration_since(at) <= window => Self {
+                editing: None,
+                confirm: None,
+                ..state
+            },
+            _ => Self::new(),
         }
     }
 
@@ -1387,6 +1422,33 @@ mod tests {
         assert_eq!(value_text(&cfg, &st.items(&cfg)[0].kind), "custom");
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
+    }
+
+    #[test]
+    fn reopens_where_settings_were_left() {
+        let mut cfg = Config::default();
+        let at = Instant::now();
+        let back = |cfg: &Config, after: u64| {
+            let left = SettingsState {
+                section: 0,
+                item: 2,
+                page: Some(crate::providers::lrcred::ID.into()),
+                editing: Some("draft".into()),
+                confirm: Some(SettingsAction::ClearCache),
+            };
+            SettingsState::reopen(Some((left, at)), cfg, at + Duration::from_secs(after))
+        };
+        let st = back(&cfg, 10);
+        assert_eq!((st.section, st.item, st.page.as_deref()), (0, 2, Some(crate::providers::lrcred::ID)));
+        assert!(st.editing.is_none() && st.confirm.is_none());
+        assert_eq!(back(&cfg, 30).item, 2);
+        assert_eq!(back(&cfg, 31).item, 0);
+        cfg.controls.remember_settings_secs = 120;
+        assert_eq!(back(&cfg, 90).item, 2);
+        cfg.controls.remember_settings = false;
+        let st = back(&cfg, 1);
+        assert_eq!((st.section, st.item, st.page), (0, 0, None));
+        assert_eq!(SettingsState::reopen(None, &Config::default(), at).item, 0);
     }
 
     #[test]
