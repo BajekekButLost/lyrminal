@@ -157,6 +157,7 @@ fn credits() -> Credits {
     Credits {
         provider: NAME.into(),
         provider_url: Some("https://lrclib.net".into()),
+        provider_credit: None,
         source: None,
         source_tag: None,
         songwriters: Vec::new(),

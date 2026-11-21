@@ -119,6 +119,7 @@ pub struct ProvidersConfig {
     pub local_library: LocalLibraryConfig,
     pub spicy_lyrics: SpicyConfig,
     pub lrc_red: SearchProviderConfig,
+    pub unison: SearchProviderConfig,
     pub lrclib: SearchProviderConfig,
     pub prefer_synced: bool,
 }
@@ -126,11 +127,18 @@ pub struct ProvidersConfig {
 impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
-            order: vec!["local-library".into(), "spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()],
+            order: vec![
+                "local-library".into(),
+                "spicy-lyrics".into(),
+                "lrc-red".into(),
+                "unison".into(),
+                "lrclib".into(),
+            ],
             disabled: Vec::new(),
             local_library: LocalLibraryConfig::default(),
             spicy_lyrics: SpicyConfig::default(),
             lrc_red: SearchProviderConfig::default(),
+            unison: SearchProviderConfig::default(),
             lrclib: SearchProviderConfig::default(),
             prefer_synced: true,
         }

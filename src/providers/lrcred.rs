@@ -95,6 +95,7 @@ impl LrcRed {
         let credits = Credits {
             provider: NAME.into(),
             provider_url: Some(format!("{BASE}/s/{isrc}")),
+            provider_credit: None,
             source: None,
             source_tag: None,
             songwriters: Vec::new(),
