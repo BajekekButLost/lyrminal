@@ -308,6 +308,7 @@ pub fn http_client() -> reqwest::Client {
 pub struct Registry {
     pub providers: Vec<Arc<dyn LyricsProvider>>,
     pub prefer_synced: bool,
+    pub prioritize_local: bool,
 }
 
 impl Registry {
@@ -342,6 +343,7 @@ impl Registry {
         Self {
             providers,
             prefer_synced: config.providers.prefer_synced,
+            prioritize_local: config.providers.local_library.prioritize,
         }
     }
 
