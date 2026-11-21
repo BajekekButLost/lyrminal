@@ -53,6 +53,7 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    let fresh = !Config::path().exists();
     let cfg = match Config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -73,6 +74,7 @@ async fn main() -> Result<()> {
     let (player_tx, player_rx) = player::spawn(cfg.player.clone());
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
     let mut app = App::new(cfg, caps, player_tx, msg_tx);
+    app.maybe_onboard(fresh);
     let mut gfx = Graphics::default();
 
     let result = run(&mut terminal, &mut app, &mut gfx, player_rx, msg_rx, &mut mouse).await;
