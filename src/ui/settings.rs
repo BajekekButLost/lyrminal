@@ -727,6 +727,14 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     },
                 ),
                 item(
+                    "Fix background lines",
+                    "On word-synced lyrics without background vocals, move words in parentheses into a background line.",
+                    Kind::Toggle {
+                        get: |c| c.lyrics.fix_background_lines,
+                        set: |c, v| c.lyrics.fix_background_lines = v,
+                    },
+                ),
+                item(
                     "Interlude dots",
                     "Show animated dots during instrumental breaks.",
                     Kind::Toggle {

@@ -1,4 +1,5 @@
 pub mod ass;
+pub mod background;
 pub mod cue;
 pub mod formats;
 pub mod json;
