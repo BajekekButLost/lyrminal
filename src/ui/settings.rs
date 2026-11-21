@@ -69,6 +69,42 @@ fn tolerance_desc() -> &'static str {
 
 pub fn provider_page(id: &str) -> Vec<Item> {
     match id {
+        crate::providers::local::ID => vec![
+            item(
+                "Enabled",
+                "Use lyrics you added yourself. Press L to open the library and import a file, a URL or the clipboard for the playing track.",
+                Kind::Toggle {
+                    get: |c| c.providers.is_enabled(crate::providers::local::ID),
+                    set: |c, v| c.providers.set_enabled(crate::providers::local::ID, v),
+                },
+            ),
+            item(
+                "Duration tolerance",
+                "Lyrics saved for another copy of a song, such as the same track in a different player, are used when the title and artist match and the length differs by at most this much.",
+                Kind::Number {
+                    min: 0.5,
+                    max: 10.0,
+                    step: 0.5,
+                    decimals: 1,
+                    unit: "s",
+                    get: |c| c.providers.local_library.duration_tolerance_secs,
+                    set: |c, v| c.providers.local_library.duration_tolerance_secs = v,
+                },
+            ),
+            item(
+                "Formats",
+                "LRC and enhanced LRC, TTML (Apple Music and AMLL), SRT, WebVTT, ASS/SSA, SBV, SAMI, JSON (Spotify, LRCLIB and Apple Music) and plain text. The format is detected automatically.",
+                Kind::Info,
+            ),
+            item(
+                "Storage",
+                &format!(
+                    "Saved lyrics and the library index live in {}. Lyrics that check for changes re-read their file or URL every time they load and fall back to the saved copy.",
+                    crate::library::Library::default().dir().display()
+                ),
+                Kind::Info,
+            ),
+        ],
         crate::providers::spicy::ID => vec![
             item(
                 "Enabled",
@@ -1062,10 +1098,10 @@ mod tests {
     fn reorders_providers() {
         let mut cfg = Config::default();
         let mut st = SettingsState::new();
-        st.item = 2;
+        st.item = 3;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('K'), KeyModifiers::SHIFT));
-        assert_eq!(ordered_ids(&cfg), vec!["spicy-lyrics", "lrclib", "lrc-red"]);
-        assert_eq!(st.item, 1);
+        assert_eq!(ordered_ids(&cfg), vec!["local-library", "spicy-lyrics", "lrclib", "lrc-red"]);
+        assert_eq!(st.item, 2);
         handle_key(&mut st, &mut cfg, key(KeyCode::Char(' '), KeyModifiers::NONE));
         assert!(!cfg.providers.is_enabled("lrclib"));
     }
@@ -1074,14 +1110,23 @@ mod tests {
     fn providers_tab_lists_only_providers() {
         let cfg = Config::default();
         let items = &sections(&cfg)[0].items;
-        assert_eq!(items.len(), 3);
+        assert_eq!(items.len(), 4);
         assert!(items.iter().all(|i| matches!(i.kind, Kind::Provider(_))));
+        assert!(matches!(&items[0].kind, Kind::Provider(id) if id == crate::providers::local::ID));
+    }
+
+    #[test]
+    fn adds_new_providers_at_their_default_position() {
+        let mut cfg = Config::default();
+        cfg.providers.order = vec!["lrclib".into(), "spicy-lyrics".into(), "lrc-red".into()];
+        assert_eq!(ordered_ids(&cfg), vec!["local-library", "lrclib", "spicy-lyrics", "lrc-red"]);
     }
 
     #[test]
     fn edits_secret_text_in_provider_page() {
         let mut cfg = Config::default();
         let mut st = SettingsState::new();
+        st.item = 1;
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some("spicy-lyrics"));
         st.item = 1;
@@ -1094,14 +1139,14 @@ mod tests {
         assert!(shown.ends_with("1234") && !shown.contains("abcd"));
         handle_key(&mut st, &mut cfg, key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(st.page.is_none());
-        assert_eq!(st.item, 0);
+        assert_eq!(st.item, 1);
     }
 
     #[test]
     fn provider_pages_have_their_own_tolerance() {
         let mut cfg = Config::default();
         let mut st = SettingsState::new();
-        st.item = 1;
+        st.item = 2;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('l'), KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some("lrc-red"));
         st.item = 1;
@@ -1129,14 +1174,14 @@ mod tests {
     fn resets_provider_priority_and_state() {
         let mut cfg = Config::default();
         let mut st = SettingsState::new();
-        st.item = 2;
+        st.item = 3;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('K'), KeyModifiers::SHIFT));
         handle_key(&mut st, &mut cfg, key(KeyCode::Char(' '), KeyModifiers::NONE));
         let out = handle_key(&mut st, &mut cfg, key(KeyCode::Char('r'), KeyModifiers::NONE));
         assert!(matches!(out, SettingsOutcome::Changed));
         assert_eq!(ordered_ids(&cfg), ordered_ids(&Config::default()));
         assert!(cfg.providers.is_enabled("lrclib"));
-        assert_eq!(st.item, 2);
+        assert_eq!(st.item, 3);
     }
 
     #[test]

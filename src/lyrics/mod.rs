@@ -1,5 +1,11 @@
+pub mod ass;
+pub mod cue;
+pub mod formats;
+pub mod json;
 pub mod lrc;
 pub mod process;
+pub mod sami;
+pub mod subtitles;
 pub mod ttml;
 
 use serde::{Deserialize, Serialize};

@@ -116,6 +116,7 @@ impl MatchTier {
 pub struct ProvidersConfig {
     pub order: Vec<String>,
     pub disabled: Vec<String>,
+    pub local_library: SearchProviderConfig,
     pub spicy_lyrics: SpicyConfig,
     pub lrc_red: SearchProviderConfig,
     pub lrclib: SearchProviderConfig,
@@ -125,8 +126,9 @@ pub struct ProvidersConfig {
 impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
-            order: vec!["spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()],
+            order: vec!["local-library".into(), "spicy-lyrics".into(), "lrc-red".into(), "lrclib".into()],
             disabled: Vec::new(),
+            local_library: SearchProviderConfig::default(),
             spicy_lyrics: SpicyConfig::default(),
             lrc_red: SearchProviderConfig::default(),
             lrclib: SearchProviderConfig::default(),
@@ -375,6 +377,12 @@ pub fn config_dir() -> PathBuf {
 pub fn cache_dir() -> PathBuf {
     dirs::cache_dir()
         .unwrap_or_else(std::env::temp_dir)
+        .join("lyrminal")
+}
+
+pub fn data_dir() -> PathBuf {
+    dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
         .join("lyrminal")
 }
 
