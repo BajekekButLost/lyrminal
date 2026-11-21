@@ -173,6 +173,7 @@ pub struct App {
     pub follow: Follow,
     last_scroll: Instant,
     pub overlay: Overlay,
+    settings_left: Option<(SettingsState, Instant)>,
     pub guide: Option<Onboarding>,
     pub toast: Option<(String, Instant)>,
     pub quit: bool,
@@ -233,6 +234,7 @@ impl App {
             follow: Follow::default(),
             last_scroll: now,
             overlay: Overlay::None,
+            settings_left: None,
             guide: None,
             toast: None,
             quit: false,
@@ -479,7 +481,7 @@ impl App {
         self.fetch_due = None;
         self.generation += 1;
         if let Overlay::Syncs(_) = self.overlay {
-            self.overlay = Overlay::None;
+            self.set_overlay(Overlay::None);
         }
         match self.track.as_ref().map(|t| t.media_kind()) {
             None => self.lyrics = LyricsState::NoTrack,
@@ -604,7 +606,7 @@ impl App {
                             self.state.save();
                         }
                         let name = crate::providers::provider_name(&candidate.provider).to_string();
-                        self.overlay = Overlay::None;
+                        self.set_overlay(Overlay::None);
                         self.temporary = None;
                         self.generation += 1;
                         self.install(Resolution {
@@ -674,7 +676,7 @@ impl App {
         match &mut self.overlay {
             Overlay::None => {}
             Overlay::Help => {
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 return;
             }
             Overlay::Settings(state) => {
@@ -682,7 +684,7 @@ impl App {
                 let outcome = settings::handle_key(state, &mut self.cfg, key);
                 match outcome {
                     SettingsOutcome::None => {}
-                    SettingsOutcome::Close => self.overlay = Overlay::None,
+                    SettingsOutcome::Close => self.set_overlay(Overlay::None),
                     SettingsOutcome::Changed => self.apply_config(&old),
                     SettingsOutcome::Action(a) => self.settings_action(a),
                 }
@@ -691,7 +693,7 @@ impl App {
             Overlay::Players { selected } => {
                 let n = self.players.len() + 1;
                 match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('p') => self.overlay = Overlay::None,
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('p') => self.set_overlay(Overlay::None),
                     KeyCode::Down | KeyCode::Char('j') => *selected = (*selected + 1).min(n - 1),
                     KeyCode::Up | KeyCode::Char('k') => *selected = selected.saturating_sub(1),
                     KeyCode::Enter | KeyCode::Char(' ') => {
@@ -703,7 +705,7 @@ impl App {
                             self.cfg.player.mode = PlayerMode::Fixed;
                             self.cfg.player.target = p.process.clone().unwrap_or_else(|| p.short_bus().to_string());
                         }
-                        self.overlay = Overlay::None;
+                        self.set_overlay(Overlay::None);
                         self.apply_config(&old);
                     }
                     _ => {}
@@ -726,7 +728,7 @@ impl App {
                 let rows = picker.rows(&order);
                 let selectable = |r: &SyncRow| !matches!(r, SyncRow::Header { .. });
                 match key.code {
-                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('s') => self.overlay = Overlay::None,
+                    KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('s') => self.set_overlay(Overlay::None),
                     KeyCode::Down | KeyCode::Char('j') => {
                         let mut i = picker.selected + 1;
                         while i < rows.len() && !selectable(&rows[i]) {
@@ -759,7 +761,7 @@ impl App {
                                 self.state.choices.remove(&key);
                                 self.state.save();
                             }
-                            self.overlay = Overlay::None;
+                            self.set_overlay(Overlay::None);
                             self.temporary = None;
                             self.schedule_fetch(Duration::ZERO);
                             self.notify("Picking the best sync automatically");
@@ -802,6 +804,17 @@ impl App {
         self.on_key(KeyEvent::new(code, KeyModifiers::NONE));
     }
 
+    fn set_overlay(&mut self, next: Overlay) {
+        if let Overlay::Settings(state) = std::mem::replace(&mut self.overlay, next) {
+            self.settings_left = Some((state, Instant::now()));
+        }
+    }
+
+    fn open_settings(&mut self) {
+        let state = SettingsState::reopen(self.settings_left.take(), &self.cfg, Instant::now());
+        self.set_overlay(Overlay::Settings(state));
+    }
+
     fn on_overlay_mouse(&mut self, m: MouseEvent) {
         match m.kind {
             MouseEventKind::ScrollDown if !matches!(self.overlay, Overlay::Help) => self.press(KeyCode::Down),
@@ -819,7 +832,7 @@ impl App {
         let target = self.ui.at(column, row);
         let key = match (&mut self.overlay, target) {
             (Overlay::Help, _) => {
-                self.overlay = Overlay::None;
+                self.set_overlay(Overlay::None);
                 None
             }
             (Overlay::Settings(s), Some(Target::Section(i))) => {
@@ -985,7 +998,7 @@ impl App {
                 .map(|i| i + 1)
                 .unwrap_or(0),
         };
-        self.overlay = Overlay::Players { selected };
+        self.set_overlay(Overlay::Players { selected });
     }
 
     fn open_syncs(&mut self) {
@@ -997,14 +1010,14 @@ impl App {
         self.picker_seq += 1;
         let generation = self.picker_seq;
         let pending: Vec<String> = self.registry.providers.iter().map(|p| p.id().to_string()).collect();
-        self.overlay = Overlay::Syncs(SyncPicker {
+        self.set_overlay(Overlay::Syncs(SyncPicker {
             generation,
             pending,
             results: Vec::new(),
             selected: 0,
             applying: None,
             error: None,
-        });
+        }));
         for p in self.registry.providers.clone() {
             let q = q.clone();
             let tx = self.msg_tx.clone();
@@ -1031,11 +1044,11 @@ impl App {
         self.library_seq += 1;
         let entries = self.library.entries();
         let start = self.cfg.providers.local_library.import_start();
-        self.overlay = Overlay::Library(LibraryDialog::new(track, entries, self.library_seq, start));
+        self.set_overlay(Overlay::Library(LibraryDialog::new(track, entries, self.library_seq, start)));
     }
 
     fn close_library(&mut self) {
-        self.overlay = Overlay::None;
+        self.set_overlay(Overlay::None);
     }
 
     fn library_busy(&mut self, what: &str) -> Option<u64> {
@@ -1324,8 +1337,8 @@ impl App {
     fn on_action(&mut self, action: Action) {
         match action {
             Action::Quit => self.quit = true,
-            Action::Help => self.overlay = Overlay::Help,
-            Action::Settings => self.overlay = Overlay::Settings(SettingsState::new()),
+            Action::Help => self.set_overlay(Overlay::Help),
+            Action::Settings => self.open_settings(),
             Action::Players => self.open_players(),
             Action::Syncs => self.open_syncs(),
             Action::Library => self.open_library(),
@@ -1473,7 +1486,7 @@ impl App {
     }
 
     pub fn start_onboarding(&mut self) {
-        self.overlay = Overlay::None;
+        self.set_overlay(Overlay::None);
         if self.state.onboarding != OnboardingStatus::Started {
             self.state.onboarding = OnboardingStatus::Started;
             self.state.save();
@@ -1867,6 +1880,31 @@ mod tests {
 
     fn step(app: &App) -> Step {
         app.guide.as_ref().unwrap().step
+    }
+
+    #[tokio::test]
+    async fn settings_reopen_where_they_were_left() {
+        let mut app = app();
+        app.guide = None;
+        let spot = |app: &App| match &app.overlay {
+            Overlay::Settings(s) => Some((s.section, s.item)),
+            _ => None,
+        };
+        app.on_action(Action::Settings);
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert_eq!(spot(&app), Some((1, 2)));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.overlay, Overlay::None));
+        app.on_action(Action::Settings);
+        assert_eq!(spot(&app), Some((1, 2)));
+        app.set_overlay(Overlay::None);
+        if let Some((_, at)) = app.settings_left.as_mut() {
+            *at -= Duration::from_secs(31);
+        }
+        app.on_action(Action::Settings);
+        assert_eq!(spot(&app), Some((0, 0)));
     }
 
     #[tokio::test]

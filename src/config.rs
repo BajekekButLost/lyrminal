@@ -382,6 +382,8 @@ impl Default for SyncConfig {
 pub struct ControlsConfig {
     pub enabled: bool,
     pub seek_step_secs: u32,
+    pub remember_settings: bool,
+    pub remember_settings_secs: u32,
 }
 
 impl Default for ControlsConfig {
@@ -389,6 +391,8 @@ impl Default for ControlsConfig {
         Self {
             enabled: false,
             seek_step_secs: 5,
+            remember_settings: true,
+            remember_settings_secs: 30,
         }
     }
 }
