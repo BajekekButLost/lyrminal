@@ -16,13 +16,14 @@ use crate::providers::{Candidate, Registry, TrackQuery, ordered_ids};
 use crate::render::{FrameInfo, Follow};
 use crate::render::cell::CellRenderer;
 use crate::render::pixel::{Fonts, PixelRenderer};
-use crate::state::State;
+use crate::state::{OnboardingStatus, State};
 use crate::term::TermCaps;
 use crate::theme::{Artwork, Theme};
 use crate::ui::draw::{Target, UiHits};
 use crate::ui::keys::{self, Action};
 use crate::ui::library::{self as library_ui, ImportRequest, LibraryDialog};
-use crate::ui::settings::{self, SettingsAction, SettingsOutcome, SettingsState};
+use crate::ui::onboarding::{self, Onboarding, Row as GuideRow, Step};
+use crate::ui::settings::{self, Kind, SettingsAction, SettingsOutcome, SettingsState};
 
 const FETCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const TOAST_FOR: Duration = Duration::from_secs(3);
@@ -157,6 +158,7 @@ pub struct App {
     pub follow: Follow,
     last_scroll: Instant,
     pub overlay: Overlay,
+    pub guide: Option<Onboarding>,
     pub toast: Option<(String, Instant)>,
     pub quit: bool,
     start: Instant,
@@ -217,6 +219,7 @@ impl App {
             follow: Follow::default(),
             last_scroll: now,
             overlay: Overlay::None,
+            guide: None,
             toast: None,
             quit: false,
             start: now,
@@ -362,11 +365,13 @@ impl App {
             self.follow.manual = false;
             self.dirty = true;
         }
+        self.guide_tick(now);
     }
 
     pub fn needs_animation(&self) -> bool {
         self.dirty
             || self.frame.animating
+            || self.guide.as_ref().is_some_and(|g| g.found_at.is_some())
             || self.cell.is_animating()
             || (self.clock.is_playing() && matches!(self.lyrics, LyricsState::Ready { .. }))
             || matches!(self.lyrics, LyricsState::Loading | LyricsState::Waiting)
@@ -615,10 +620,13 @@ impl App {
             Event::Paste(text) => match &mut self.overlay {
                 Overlay::Settings(s) => settings::paste(s, &text),
                 Overlay::Library(d) => library_ui::paste(d, &text),
+                Overlay::None => self.guide_paste(&text),
                 _ => {}
             },
             Event::Mouse(m) if self.cfg.appearance.mouse && !matches!(self.overlay, Overlay::None) => self.on_overlay_mouse(m),
             Event::Mouse(m) if self.cfg.appearance.mouse => match m.kind {
+                MouseEventKind::ScrollDown if self.ui.in_guide(m.column, m.row) => self.guide_press(KeyCode::Down),
+                MouseEventKind::ScrollUp if self.ui.in_guide(m.column, m.row) => self.guide_press(KeyCode::Up),
                 MouseEventKind::ScrollDown => self.scroll_by(MOUSE_SCROLL_ROWS),
                 MouseEventKind::ScrollUp => self.scroll_by(-MOUSE_SCROLL_ROWS),
                 MouseEventKind::Down(MouseButton::Left) => self.on_press(m.column, m.row),
@@ -760,6 +768,9 @@ impl App {
                 return;
             }
         }
+        if self.on_guide_key(key) {
+            return;
+        }
         if let Some(action) = keys::map(key) {
             self.on_action(action);
         }
@@ -864,6 +875,7 @@ impl App {
     fn settings_action(&mut self, action: SettingsAction) {
         match action {
             SettingsAction::PickPlayer => self.open_players(),
+            SettingsAction::Onboarding => self.start_onboarding(),
             SettingsAction::ClearCache => {
                 let cache = self.cache.clone();
                 let tx = self.msg_tx.clone();
@@ -1200,8 +1212,26 @@ impl App {
     }
 
     fn on_press(&mut self, column: u16, row: u16) {
-        if let Some(Target::Action(action)) = self.ui.at(column, row) {
-            self.on_action(action);
+        match self.ui.at(column, row) {
+            Some(Target::Action(action)) => {
+                self.on_action(action);
+                return;
+            }
+            Some(Target::Row(i)) if self.guide.is_some() => {
+                self.guide_click(i);
+                return;
+            }
+            Some(Target::Decrease) if self.guide.is_some() => {
+                self.guide_press(KeyCode::Left);
+                return;
+            }
+            Some(Target::Increase) if self.guide.is_some() => {
+                self.guide_press(KeyCode::Right);
+                return;
+            }
+            _ => {}
+        }
+        if self.ui.in_guide(column, row) {
             return;
         }
         if let Some((y, x0, width)) = self.progress_bar
@@ -1408,6 +1438,249 @@ impl App {
     }
 }
 
+impl App {
+    pub fn maybe_onboard(&mut self, fresh: bool) {
+        match self.state.onboarding {
+            OnboardingStatus::Started => self.start_onboarding(),
+            OnboardingStatus::Unknown if fresh => self.start_onboarding(),
+            _ => {}
+        }
+    }
+
+    pub fn start_onboarding(&mut self) {
+        self.overlay = Overlay::None;
+        if self.state.onboarding != OnboardingStatus::Started {
+            self.state.onboarding = OnboardingStatus::Started;
+            self.state.save();
+        }
+        self.toast = None;
+        self.guide = Some(Onboarding::new());
+        self.guide_go(Step::Player);
+    }
+
+    fn finish_onboarding(&mut self, skipped: bool) {
+        self.guide = None;
+        self.state.onboarding = OnboardingStatus::Done;
+        self.state.save();
+        self.notify(if skipped {
+            "Tour skipped · Settings → About → Welcome tour brings it back"
+        } else {
+            "Enjoy the music · ? shows every key"
+        });
+    }
+
+    fn guide_go(&mut self, step: Step) {
+        let Some(mut g) = self.guide.take() else { return };
+        g.go(step);
+        g.selected = g.default_row(&g.rows(self));
+        self.guide = Some(g);
+        self.dirty = true;
+    }
+
+    fn guide_tick(&mut self, now: Instant) {
+        let synced = matches!(&self.lyrics, LyricsState::Ready { prepared, .. } if prepared.lyrics.kind != SyncKind::Static);
+        let idle = matches!(self.overlay, Overlay::None);
+        let Some(g) = self.guide.as_mut() else { return };
+        if g.step != Step::Song || !g.auto_advance {
+            return;
+        }
+        if !synced {
+            if g.found_at.take().is_some() {
+                self.dirty = true;
+            }
+            return;
+        }
+        let at = *g.found_at.get_or_insert(now);
+        if idle && g.editing.is_none() && now.saturating_duration_since(at) >= onboarding::ADVANCE_AFTER {
+            self.guide_go(Step::Customize);
+        }
+    }
+
+    fn guide_state(&self) -> Option<(Vec<GuideRow>, usize, Step, bool)> {
+        let g = self.guide.as_ref()?;
+        let rows = g.rows(self);
+        if rows.is_empty() {
+            return None;
+        }
+        let sel = g.selected.min(rows.len() - 1);
+        Some((rows, sel, g.step, g.editing.is_some()))
+    }
+
+    fn guide_select(&mut self, i: usize) {
+        if let Some(g) = self.guide.as_mut() {
+            g.selected = i;
+        }
+    }
+
+    fn guide_press(&mut self, code: KeyCode) {
+        self.on_guide_key(KeyEvent::new(code, KeyModifiers::NONE));
+    }
+
+    fn guide_change(&mut self, kind: &Kind, dir: i32, shift: bool) {
+        let old = self.cfg.clone();
+        if settings::step_value(&mut self.cfg, kind, dir, shift) {
+            self.apply_config(&old);
+        }
+    }
+
+    fn guide_toggle_provider(&mut self, id: &str) {
+        let old = self.cfg.clone();
+        let on = self.cfg.providers.is_enabled(id);
+        self.cfg.providers.set_enabled(id, !on);
+        self.apply_config(&old);
+    }
+
+    fn on_guide_key(&mut self, key: KeyEvent) -> bool {
+        let Some((rows, sel, step, editing)) = self.guide_state() else { return false };
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        if editing {
+            let Some(g) = self.guide.as_mut() else { return false };
+            match key.code {
+                KeyCode::Esc => g.editing = None,
+                KeyCode::Enter => {
+                    let value = g.editing.take().unwrap_or_default();
+                    if let Some(Kind::Text { set, .. }) = rows[sel].kind() {
+                        let old = self.cfg.clone();
+                        set(&mut self.cfg, value);
+                        self.apply_config(&old);
+                    }
+                }
+                KeyCode::Backspace => {
+                    if let Some(buf) = g.editing.as_mut() {
+                        buf.pop();
+                    }
+                }
+                KeyCode::Char('u') if ctrl => g.editing = Some(String::new()),
+                KeyCode::Char(c) if !ctrl => {
+                    if let Some(buf) = g.editing.as_mut() {
+                        buf.push(c);
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
+        let row = &rows[sel];
+        let reorder = matches!(key.code, KeyCode::Char('K') | KeyCode::Char('J'))
+            || (shift && matches!(key.code, KeyCode::Up | KeyCode::Down));
+        match key.code {
+            _ if reorder && matches!(row, GuideRow::Provider(_)) => {
+                let GuideRow::Provider(id) = row else { return true };
+                let delta = if matches!(key.code, KeyCode::Up | KeyCode::Char('K')) { -1 } else { 1 };
+                let old = self.cfg.clone();
+                let mut ids = ordered_ids(&self.cfg);
+                if let Some(pos) = ids.iter().position(|p| p == id) {
+                    let to = (pos as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
+                    let moved = ids.remove(pos);
+                    ids.insert(to, moved);
+                    self.cfg.providers.order = ids;
+                    self.apply_config(&old);
+                    self.guide_select(to);
+                }
+            }
+            KeyCode::Up | KeyCode::Char('k') => self.guide_select(sel.saturating_sub(1)),
+            KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => self.guide_select((sel + 1).min(rows.len() - 1)),
+            KeyCode::BackTab => self.guide_select(sel.saturating_sub(1)),
+            KeyCode::Home => self.guide_select(0),
+            KeyCode::End => self.guide_select(rows.len() - 1),
+            KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') => {
+                let dir = if matches!(key.code, KeyCode::Left | KeyCode::Char('h')) { -1 } else { 1 };
+                match row {
+                    GuideRow::Provider(id) => self.guide_toggle_provider(id),
+                    GuideRow::Setting(it) if settings::adjustable(&it.kind) => self.guide_change(&it.kind, dir, shift),
+                    _ => {}
+                }
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => self.guide_activate(row, step),
+            KeyCode::Backspace | KeyCode::Delete if row.is_text() => {
+                if let Some(Kind::Text { set, .. }) = row.kind() {
+                    let old = self.cfg.clone();
+                    set(&mut self.cfg, String::new());
+                    self.apply_config(&old);
+                }
+            }
+            KeyCode::Esc => match step.prev() {
+                Some(prev) => self.guide_go(prev),
+                None => return false,
+            },
+            _ => return false,
+        }
+        self.dirty = true;
+        true
+    }
+
+    fn guide_activate(&mut self, row: &GuideRow, step: Step) {
+        match row {
+            GuideRow::Auto => {
+                let old = self.cfg.clone();
+                self.cfg.player.mode = PlayerMode::Auto;
+                self.apply_config(&old);
+            }
+            GuideRow::Player(i) => {
+                let Some(target) = self
+                    .players
+                    .get(*i)
+                    .map(|p| p.process.clone().unwrap_or_else(|| p.short_bus().to_string()))
+                else {
+                    return;
+                };
+                let old = self.cfg.clone();
+                self.cfg.player.mode = PlayerMode::Fixed;
+                self.cfg.player.target = target;
+                self.apply_config(&old);
+            }
+            GuideRow::Setting(it) => match &it.kind {
+                Kind::Text { get, secret, .. } => {
+                    let start = if *secret { String::new() } else { get(&self.cfg) };
+                    if let Some(g) = self.guide.as_mut() {
+                        g.editing = Some(start);
+                    }
+                }
+                kind => self.guide_change(kind, 1, false),
+            },
+            GuideRow::Provider(id) => self.guide_toggle_provider(id),
+            GuideRow::Next => match step.next() {
+                Some(next) => self.guide_go(next),
+                None => self.finish_onboarding(false),
+            },
+            GuideRow::Back => {
+                if let Some(prev) = step.prev() {
+                    self.guide_go(prev);
+                }
+            }
+            GuideRow::Skip => self.finish_onboarding(true),
+        }
+    }
+
+    fn guide_click(&mut self, i: usize) {
+        let Some((_, sel, _, editing)) = self.guide_state() else { return };
+        let same = sel == i;
+        if editing {
+            if same {
+                return;
+            }
+            self.guide_press(KeyCode::Enter);
+        }
+        self.guide_select(i);
+        if same {
+            self.guide_press(KeyCode::Enter);
+        }
+    }
+
+    fn guide_paste(&mut self, text: &str) {
+        let Some((rows, sel, _, _)) = self.guide_state() else { return };
+        let text = text.trim_matches(['\n', '\r']);
+        let is_text = rows[sel].is_text();
+        let Some(g) = self.guide.as_mut() else { return };
+        match g.editing.as_mut() {
+            Some(buf) => buf.push_str(text),
+            None if is_text => g.editing = Some(text.to_string()),
+            None => {}
+        }
+    }
+}
+
 async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
     let text = match req.pasted {
         Some(p) => p,
@@ -1483,5 +1756,139 @@ mod erased {
         fn json(&self) -> String {
             serde_json::to_string(self).unwrap_or_default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app() -> App {
+        let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::new(Config::default(), TermCaps::default(), player_tx, msg_tx);
+        app.guide = Some(Onboarding::new());
+        app.guide_go(Step::Player);
+        app
+    }
+
+    fn snapshot() -> PlayerEvent {
+        PlayerEvent::Active(Some(Snapshot {
+            player: PlayerInfo {
+                bus: "org.mpris.MediaPlayer2.test".into(),
+                identity: "Test Player".into(),
+                process: Some("testplayer".into()),
+                pid: None,
+                desktop_entry: None,
+                status: Status::Playing,
+                now_playing: None,
+            },
+            track: Some(TrackMeta {
+                title: "Tour Song".into(),
+                artists: vec!["Nobody".into()],
+                length: Some(30.0),
+                ..Default::default()
+            }),
+            status: Status::Playing,
+            rate: 1.0,
+            position: 0.0,
+            sampled_at: Instant::now(),
+            caps: Default::default(),
+        }))
+    }
+
+    fn screen(app: &mut App, w: u16, h: u16) -> Vec<String> {
+        let mut term = ratatui::Terminal::new(ratatui::backend::TestBackend::new(w, h)).unwrap();
+        term.draw(|f| {
+            crate::ui::draw::draw(f, app, Instant::now(), 0.0);
+        })
+        .unwrap();
+        let buf = term.backend().buffer().clone();
+        (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.on_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    fn step(app: &App) -> Step {
+        app.guide.as_ref().unwrap().step
+    }
+
+    #[tokio::test]
+    async fn tour_walks_from_the_player_to_the_looks() {
+        let mut app = app();
+        app.on_player(snapshot());
+        let wide = screen(&mut app, 160, 40);
+        assert!(wide[0].starts_with("╭ Welcome to Lyrminal"));
+        assert!(wide.iter().any(|l| l.contains("✓ Following Test Player")));
+        let narrow = screen(&mut app, 80, 40);
+        assert!(narrow[0].starts_with("╭ Welcome to Lyrminal"));
+        assert!(narrow[17].starts_with("╰"));
+
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(step(&app), Step::Providers);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(step(&app), Step::Player);
+        press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(step(&app), Step::Song);
+
+        let (lyrics, _) = library::parse("[00:01.00]first line\n[00:05.00]second line\n", &Source::Clipboard, None, Some(30.0)).unwrap();
+        app.show_now(Resolution {
+            candidate: Candidate {
+                provider: crate::providers::lrclib::ID.into(),
+                id: "1".into(),
+                title: "Tour Song".into(),
+                artists: vec!["Nobody".into()],
+                album: None,
+                duration: Some(30.0),
+                tier: None,
+                kind_hint: None,
+                note: None,
+            },
+            lyrics,
+            manual: false,
+        });
+        let now = Instant::now();
+        app.tick(now);
+        assert_eq!(step(&app), Step::Song);
+        assert!(screen(&mut app, 160, 40).iter().any(|l| l.contains("✓ Line sync from LRCLIB")));
+        app.tick(now + onboarding::ADVANCE_AFTER);
+        assert_eq!(step(&app), Step::Customize);
+        assert_eq!(app.guide.as_ref().unwrap().selected, 0);
+        let looks = screen(&mut app, 160, 40);
+        assert!(looks.iter().any(|l| l.contains("Tip: the Spicy Lyrics preset")));
+        assert!(looks.iter().any(|l| l.contains("› Preset") && l.contains("‹ Lyrminal ›")));
+        assert!(looks.iter().any(|l| l[l.char_indices().nth(60).unwrap().0..].contains("first line")));
+
+        press(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.overlay, Overlay::Help));
+        press(&mut app, KeyCode::Char('x'));
+        press(&mut app, KeyCode::Down);
+        assert_eq!(app.guide.as_ref().unwrap().selected, 1);
+
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(step(&app), Step::Song);
+        app.tick(now + onboarding::ADVANCE_AFTER * 2);
+        app.tick(now + onboarding::ADVANCE_AFTER * 4);
+        assert_eq!(step(&app), Step::Song);
+    }
+
+    #[tokio::test]
+    async fn pasting_on_the_key_row_starts_editing() {
+        let mut app = app();
+        app.guide_go(Step::Providers);
+        let rows = app.guide.as_ref().unwrap().rows(&app);
+        let key_row = rows.iter().position(|r| r.is_text()).unwrap();
+        app.guide_select(key_row);
+        app.on_event(Event::Paste("sl_sk_secret\n".into()));
+        assert_eq!(app.guide.as_ref().unwrap().editing.as_deref(), Some("sl_sk_secret"));
+        let shown = screen(&mut app, 160, 40);
+        assert!(shown.iter().any(|l| l.contains("••••••••••••▏")));
+        assert!(!shown.iter().any(|l| l.contains("sl_sk_secret")));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.guide.as_ref().unwrap().editing.is_none());
+        assert_eq!(step(&app), Step::Providers);
     }
 }
