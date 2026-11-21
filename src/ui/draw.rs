@@ -18,6 +18,7 @@ use crate::term::kitty::{self, Placement};
 use crate::theme::Theme;
 use crate::ui::keys::{Action, HELP};
 use crate::ui::library::{LibraryDialog, Row as LibRow, SourceKind};
+use crate::ui::onboarding;
 use crate::ui::settings::{self, Kind};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -41,6 +42,7 @@ pub enum Target {
 #[derive(Debug, Clone, Default)]
 pub struct UiHits {
     pub modal: Option<Rect>,
+    pub guide: Option<Rect>,
     pub targets: Vec<(Rect, Target)>,
 }
 
@@ -54,7 +56,11 @@ impl UiHits {
         self.modal.is_some_and(|r| r.contains(Position::new(x, y)))
     }
 
-    fn push(&mut self, rect: Rect, target: Target, bounds: Rect) {
+    pub fn in_guide(&self, x: u16, y: u16) -> bool {
+        self.guide.is_some_and(|r| r.contains(Position::new(x, y)))
+    }
+
+    pub(crate) fn push(&mut self, rect: Rect, target: Target, bounds: Rect) {
         let rect = rect.intersection(bounds);
         if !rect.is_empty() {
             self.targets.push((rect, target));
@@ -62,7 +68,7 @@ impl UiHits {
     }
 }
 
-fn row_rect(x: u16, y: u16, width: u16) -> Rect {
+pub(crate) fn row_rect(x: u16, y: u16, width: u16) -> Rect {
     Rect { x, y, width, height: 1 }
 }
 
@@ -83,7 +89,7 @@ fn fmt_time(secs: f64) -> String {
     }
 }
 
-fn truncate(s: &str, width: usize) -> String {
+pub(crate) fn truncate(s: &str, width: usize) -> String {
     if UnicodeWidthStr::width(s) <= width {
         return s.to_string();
     }
@@ -117,7 +123,7 @@ fn paint_background(f: &mut Frame, theme: &Theme) {
     }
 }
 
-fn spinner(app: &App) -> &'static str {
+pub(crate) fn spinner(app: &App) -> &'static str {
     SPINNER[((app.wall() * 12.0) as usize) % SPINNER.len()]
 }
 
@@ -127,7 +133,13 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     if !pixel {
         paint_background(f, &theme);
     }
-    let area = f.area();
+    let (guide_area, area) = match app.guide {
+        Some(_) => {
+            let split = onboarding::split(f.area());
+            (Some(split.panel), split.main)
+        }
+        None => (None, f.area()),
+    };
     let has_track = app.track.is_some();
     let header_h = if app.cfg.appearance.show_header && has_track { 6 } else { 0 };
     let progress_h = if app.cfg.appearance.show_progress && has_track { 1 } else { 0 };
@@ -151,6 +163,9 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     let mut hits = UiHits::default();
     if status_h > 0 {
         draw_status(f, app, status, &mut hits);
+    }
+    if let Some(panel) = guide_area {
+        onboarding::draw(f, app, panel, &mut hits);
     }
     let overlay_open = !matches!(app.overlay, Overlay::None);
     if overlay_open {
@@ -501,7 +516,7 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     f.render_widget(Paragraph::new(line), area);
 }
 
-fn panel(theme: &Theme) -> (Rgb, Style) {
+pub(crate) fn panel(theme: &Theme) -> (Rgb, Style) {
     let bg = if theme.paint == Background::None {
         theme.base.mix(theme.text, 0.05)
     } else {
@@ -510,7 +525,7 @@ fn panel(theme: &Theme) -> (Rgb, Style) {
     (bg, Style::default().bg(bg.to_color()).fg(bg.mix(theme.text, 0.9).to_color()))
 }
 
-fn panel_ink(theme: &Theme, bg: Rgb, alpha: f32) -> Style {
+pub(crate) fn panel_ink(theme: &Theme, bg: Rgb, alpha: f32) -> Style {
     Style::default().fg(bg.mix(theme.text, alpha).to_color()).bg(bg.to_color())
 }
 
@@ -631,7 +646,7 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
                 _ => buf.to_string(),
             };
             format!("{shown}▏")
-        } else if is_sel && matches!(it.kind, Kind::Choice { .. } | Kind::Number { .. }) {
+        } else if is_sel && matches!(it.kind, Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset) {
             format!("‹ {} ›", settings::value_text(&app.cfg, &it.kind))
         } else {
             settings::value_text(&app.cfg, &it.kind)
@@ -672,6 +687,7 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
             settings::SettingsAction::ClearCache => "clear the lyrics cache",
             settings::SettingsAction::ResetDefaults => "reset every setting and API key",
             settings::SettingsAction::PickPlayer => "pick a player",
+            settings::SettingsAction::Onboarding => "start the welcome tour",
         };
         format!("Press y or click it again to {what}, any other key to cancel.")
     } else if state.editing.is_some() {

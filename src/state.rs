@@ -7,11 +7,21 @@ use serde::{Deserialize, Serialize};
 use crate::config::state_dir;
 use crate::providers::Candidate;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OnboardingStatus {
+    #[default]
+    Unknown,
+    Started,
+    Done,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct State {
     pub choices: HashMap<String, Candidate>,
     pub offsets: HashMap<String, i64>,
+    pub onboarding: OnboardingStatus,
 }
 
 impl State {
