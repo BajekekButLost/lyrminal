@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod local;
 pub mod lrclib;
 pub mod lrcred;
 pub mod resolve;
@@ -186,6 +187,7 @@ pub struct Candidate {
 pub enum ProviderError {
     NotConfigured(String),
     NotFound,
+    Local(String),
     RateLimited(Option<u64>),
     Unavailable(String, Option<u64>),
     Http(u16, String),
@@ -197,6 +199,7 @@ impl fmt::Display for ProviderError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ProviderError::NotConfigured(m) => write!(f, "not configured: {m}"),
+            ProviderError::Local(m) => write!(f, "{m}"),
             ProviderError::NotFound => write!(f, "no lyrics found"),
             ProviderError::RateLimited(Some(s)) => write!(f, "rate limited, retry in {s}s"),
             ProviderError::RateLimited(None) => write!(f, "rate limited"),
@@ -236,6 +239,10 @@ pub struct ProviderInfo {
 
 pub const KNOWN_PROVIDERS: &[ProviderInfo] = &[
     ProviderInfo {
+        id: local::ID,
+        name: local::NAME,
+    },
+    ProviderInfo {
         id: spicy::ID,
         name: spicy::NAME,
     },
@@ -268,6 +275,10 @@ pub fn provider_name(id: &str) -> &str {
         .unwrap_or(id)
 }
 
+pub fn cacheable(id: &str) -> bool {
+    id != local::ID
+}
+
 pub fn ordered_ids(config: &Config) -> Vec<String> {
     let mut ids: Vec<String> = config
         .providers
@@ -276,9 +287,9 @@ pub fn ordered_ids(config: &Config) -> Vec<String> {
         .filter(|id| KNOWN_PROVIDERS.iter().any(|p| p.id == id.as_str()))
         .cloned()
         .collect();
-    for p in KNOWN_PROVIDERS {
-        if !ids.iter().any(|i| i == p.id) {
-            ids.push(p.id.to_string());
+    for (i, p) in KNOWN_PROVIDERS.iter().enumerate() {
+        if !ids.iter().any(|x| x == p.id) {
+            ids.insert(i.min(ids.len()), p.id.to_string());
         }
     }
     ids
@@ -307,6 +318,11 @@ impl Registry {
                 continue;
             }
             match id.as_str() {
+                local::ID => providers.push(Arc::new(local::LocalLibrary::new(
+                    client.clone(),
+                    crate::library::Library::default(),
+                    config.providers.local_library.duration_tolerance_secs,
+                ))),
                 spicy::ID => providers.push(Arc::new(spicy::SpicyLyrics::new(
                     client.clone(),
                     config.providers.spicy_lyrics.effective_key(),
