@@ -91,7 +91,13 @@ impl LyricsProvider for LocalLibrary {
 
     fn search<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Vec<Candidate>>> {
         Box::pin(async move {
-            let mut out: Vec<Candidate> = self.library.entries().iter().map(|e| self.candidate(q, e)).collect();
+            let mut out: Vec<Candidate> = self
+                .library
+                .entries()
+                .iter()
+                .map(|e| self.candidate(q, e))
+                .filter(|c| c.tier.is_some_and(|t| t <= MatchTier::Version))
+                .collect();
             out.sort_by(|a, b| a.tier.cmp(&b.tier).then_with(|| a.title.cmp(&b.title)));
             Ok(out)
         })
@@ -102,5 +108,49 @@ impl LyricsProvider for LocalLibrary {
             let e = self.library.get(&c.id).ok_or(ProviderError::NotFound)?;
             self.load(&e, c.duration).await
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::library::Source;
+
+    fn track(title: &str, artist: &str) -> TrackQuery {
+        TrackQuery {
+            title: title.into(),
+            artists: vec![artist.into()],
+            duration: Some(200.0),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn search_only_offers_matching_entries() {
+        let dir = std::env::temp_dir().join(format!("lyrminal-local-{}", std::process::id()));
+        let library = Library::new(dir.clone());
+        for (title, artist) in [("Song", "Artist"), ("Other Tune", "Artist"), ("Song", "Someone Else")] {
+            let t = track(title, artist);
+            let key = t.key();
+            let e = Entry {
+                id: Library::id_for(&key),
+                key,
+                track: t,
+                source: Source::Clipboard,
+                format: None,
+                detected: None,
+                kind: None,
+                watch: false,
+                file: String::new(),
+                added_at: 1,
+                updated_at: 1,
+            };
+            library.put(e, "[00:01.00]line").unwrap();
+        }
+        let provider = LocalLibrary::new(crate::providers::http_client(), library, 3.0);
+        let found = provider.search(&track("Song", "Artist")).await.unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].tier, Some(MatchTier::Exact));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
