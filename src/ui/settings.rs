@@ -1,17 +1,20 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::{
-    Alignment, Background, ClickSeek, Config, MatchTier, PlayerMode, Renderer, SPICY_KEY_ENV, ScrollAnimation,
+    Alignment, Background, ClickSeek, Config, MatchTier, PlayerMode, Preset, Renderer, SPICY_KEY_ENV, ScrollAnimation,
     SyllableSpacing, VisualStyle,
 };
 use crate::providers::cache::MAX_TTL_DAYS;
 use crate::providers::{ordered_ids, provider_name};
+
+pub const PRESET_DESC: &str = "Changes the look in one go. Spicy Lyrics matches the Spicy Lyrics extension: real fonts with depth blur in the pixel renderer, an album-coloured gradient, syllables that grow on their own and a page that glides as one. Lyrminal is the default look.";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsAction {
     PickPlayer,
     ClearCache,
     ResetDefaults,
+    Onboarding,
 }
 
 pub enum Kind {
@@ -40,6 +43,7 @@ pub enum Kind {
         placeholder: &'static str,
     },
     Provider(String),
+    Preset,
     Action(SettingsAction),
     Info,
 }
@@ -286,6 +290,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
         Section {
             title: "Appearance",
             items: vec![
+                item("Preset", PRESET_DESC, Kind::Preset),
                 item(
                     "Renderer",
                     "Cell draws with terminal text. Pixel draws real fonts with blur, scale and glow through the kitty graphics protocol (kitty, Ghostty, WezTerm).",
@@ -765,6 +770,11 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                 ),
                 item("Config file", &crate::config::Config::path().display().to_string(), Kind::Info),
                 item(
+                    "Welcome tour",
+                    "Walk through setting up the player and providers again, then try the main looks on a song that is playing.",
+                    Kind::Action(SettingsAction::Onboarding),
+                ),
+                item(
                     "Reset all settings",
                     "Restore every setting to its default, including API keys.",
                     Kind::Action(SettingsAction::ResetDefaults),
@@ -813,8 +823,55 @@ pub fn value_text(cfg: &Config, kind: &Kind) -> String {
             };
             format!("#{pos} {}{ready}", if on { "on" } else { "off" })
         }
+        Kind::Preset => Preset::detect(cfg).map(|p| p.label()).unwrap_or("custom").into(),
         Kind::Action(_) => "↵".into(),
         Kind::Info => String::new(),
+    }
+}
+
+pub fn find_item(cfg: &Config, section: &str, label: &str) -> Option<Item> {
+    sections(cfg)
+        .into_iter()
+        .find(|s| s.title == section)?
+        .items
+        .into_iter()
+        .find(|i| i.label == label)
+}
+
+pub fn adjustable(kind: &Kind) -> bool {
+    matches!(kind, Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset)
+}
+
+pub fn step_value(cfg: &mut Config, kind: &Kind, dir: i32, shift: bool) -> bool {
+    match kind {
+        Kind::Choice { options, get, set } => {
+            let n = options.len() as i32;
+            set(cfg, ((get(cfg) as i32 + dir).rem_euclid(n)) as usize);
+            true
+        }
+        Kind::Number {
+            min, max, step, get, set, ..
+        } => {
+            let mult = if shift { 10.0 } else { 1.0 };
+            let v = (get(cfg) + dir as f64 * step * mult).clamp(*min, *max);
+            set(cfg, (v / step).round() * step);
+            true
+        }
+        Kind::Toggle { get, set } => {
+            set(cfg, !get(cfg));
+            true
+        }
+        Kind::Preset => {
+            let n = Preset::ALL.len() as i32;
+            let next = match Preset::detect(cfg).and_then(|p| Preset::ALL.iter().position(|q| *q == p)) {
+                Some(i) => (i as i32 + dir).rem_euclid(n),
+                None if dir > 0 => 0,
+                None => n - 1,
+            };
+            Preset::ALL[next as usize].apply(cfg);
+            true
+        }
+        _ => false,
     }
 }
 
@@ -905,7 +962,7 @@ fn reset_item(state: &mut SettingsState, cfg: &mut Config, kind: &Kind) -> bool 
             }
             before != (ordered_ids(cfg), cfg.providers.is_enabled(id))
         }
-        Kind::Action(_) | Kind::Info => false,
+        Kind::Preset | Kind::Action(_) | Kind::Info => false,
     }
 }
 
@@ -1002,41 +1059,19 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
         KeyCode::End | KeyCode::Char('G') => state.item = items.len() - 1,
         KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') => {
             let dir: i32 = if matches!(key.code, KeyCode::Left | KeyCode::Char('h')) { -1 } else { 1 };
-            match &current.kind {
-                Kind::Choice { options, get, set } => {
-                    let n = options.len() as i32;
-                    set(cfg, ((get(cfg) as i32 + dir).rem_euclid(n)) as usize);
-                    return SettingsOutcome::Changed;
-                }
-                Kind::Number {
-                    min, max, step, get, set, ..
-                } => {
-                    let mult = if shift { 10.0 } else { 1.0 };
-                    let v = (get(cfg) + dir as f64 * step * mult).clamp(*min, *max);
-                    set(cfg, (v / step).round() * step);
-                    return SettingsOutcome::Changed;
-                }
-                Kind::Toggle { get, set } => {
-                    set(cfg, !get(cfg));
-                    return SettingsOutcome::Changed;
-                }
-                _ => {
-                    if dir < 0 {
-                        state.section = (state.section + secs.len() - 1) % secs.len();
-                    } else {
-                        state.section = (state.section + 1) % secs.len();
-                    }
-                    state.item = 0;
-                }
-            }
-        }
-        KeyCode::Enter | KeyCode::Char(' ') => match &current.kind {
-            Kind::Toggle { get, set } => {
-                set(cfg, !get(cfg));
+            if step_value(cfg, &current.kind, dir, shift) {
                 return SettingsOutcome::Changed;
             }
-            Kind::Choice { options, get, set } => {
-                set(cfg, (get(cfg) + 1) % options.len());
+            if dir < 0 {
+                state.section = (state.section + secs.len() - 1) % secs.len();
+            } else {
+                state.section = (state.section + 1) % secs.len();
+            }
+            state.item = 0;
+        }
+        KeyCode::Enter | KeyCode::Char(' ') => match &current.kind {
+            Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Preset => {
+                step_value(cfg, &current.kind, 1, false);
                 return SettingsOutcome::Changed;
             }
             Kind::Text { get, secret, .. } => {
@@ -1053,7 +1088,7 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
                 }
             }
             Kind::Action(a) => match a {
-                SettingsAction::PickPlayer => return SettingsOutcome::Action(*a),
+                SettingsAction::PickPlayer | SettingsAction::Onboarding => return SettingsOutcome::Action(*a),
                 _ => state.confirm = Some(*a),
             },
             Kind::Number { .. } | Kind::Info => {}
@@ -1182,6 +1217,21 @@ mod tests {
         assert_eq!(ordered_ids(&cfg), ordered_ids(&Config::default()));
         assert!(cfg.providers.is_enabled("lrclib"));
         assert_eq!(st.item, 3);
+    }
+
+    #[test]
+    fn applies_presets_from_appearance() {
+        let mut cfg = Config::default();
+        let mut st = SettingsState::new();
+        st.section = sections(&cfg).iter().position(|s| s.title == "Appearance").unwrap();
+        assert_eq!(value_text(&cfg, &st.items(&cfg)[0].kind), "Lyrminal");
+        let out = handle_key(&mut st, &mut cfg, key(KeyCode::Left, KeyModifiers::NONE));
+        assert!(matches!(out, SettingsOutcome::Changed));
+        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
+        cfg.appearance.glow = true;
+        assert_eq!(value_text(&cfg, &st.items(&cfg)[0].kind), "custom");
+        handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
     }
 
     #[test]
