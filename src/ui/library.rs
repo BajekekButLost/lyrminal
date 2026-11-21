@@ -127,6 +127,15 @@ impl LibraryDialog {
         rows
     }
 
+    pub fn group_starts(&self) -> Vec<usize> {
+        let rows = self.rows();
+        let mut starts = vec![0];
+        if let Some(i) = rows.iter().position(|r| matches!(r, Row::Entry(_))) {
+            starts.push(i);
+        }
+        starts
+    }
+
     pub fn current(&self) -> Option<Row> {
         self.rows().get(self.selected).copied()
     }
@@ -306,8 +315,14 @@ pub fn handle_key(d: &mut LibraryDialog, key: KeyEvent) -> Outcome {
     let row = rows[d.selected];
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('L') => return Outcome::Close,
-        KeyCode::Down | KeyCode::Char('j') | KeyCode::Tab => d.selected = (d.selected + 1).min(rows.len() - 1),
-        KeyCode::Up | KeyCode::Char('k') | KeyCode::BackTab => d.selected = d.selected.saturating_sub(1),
+        KeyCode::Tab | KeyCode::BackTab => {
+            let dir = if key.code == KeyCode::Tab { 1 } else { -1 };
+            if let Some(i) = crate::ui::jump_group(&d.group_starts(), d.selected, dir) {
+                d.selected = i;
+            }
+        }
+        KeyCode::Down | KeyCode::Char('j') => d.selected = (d.selected + 1).min(rows.len() - 1),
+        KeyCode::Up | KeyCode::Char('k') => d.selected = d.selected.saturating_sub(1),
         KeyCode::Home | KeyCode::Char('g') => d.selected = 0,
         KeyCode::End | KeyCode::Char('G') => d.selected = rows.len() - 1,
         KeyCode::Left | KeyCode::Char('h') => {
