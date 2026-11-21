@@ -262,12 +262,23 @@ pub fn split_background(lyrics: &mut Lyrics) {
     if lyrics.kind != SyncKind::Syllable {
         return;
     }
-    for line in &mut lyrics.lines {
-        if line.background_only || line.background.iter().any(|g| !g.syllables.is_empty()) {
+    let mut out: Vec<LyricLine> = Vec::with_capacity(lyrics.lines.len());
+    for mut line in std::mem::take(&mut lyrics.lines) {
+        let eligible = !line.background_only && line.background.iter().all(|g| g.syllables.is_empty());
+        if eligible {
+            split_line(&mut line);
+        }
+        let whole = eligible && line.lead.syllables.is_empty() && !line.background.is_empty();
+        if let (true, Some(prev)) = (whole, out.last_mut()) {
+            if let Some(g) = line.background.first_mut() {
+                g.translation = g.translation.take().or(line.lead.translation.take());
+            }
+            prev.background.append(&mut line.background);
             continue;
         }
-        split_line(line);
+        out.push(line);
     }
+    lyrics.lines = out;
 }
 
 #[cfg(test)]
@@ -381,11 +392,46 @@ mod tests {
         assert_eq!(l.background[0].text(), "Yeah, yeah");
     }
 
+    fn shifted(words: &[&str], by: f64) -> LyricLine {
+        let mut l = line(words);
+        l.start += by;
+        l.end += by;
+        l.lead.start += by;
+        l.lead.end += by;
+        for s in &mut l.lead.syllables {
+            s.start += by;
+            s.end += by;
+        }
+        l
+    }
+
     #[test]
-    fn whole_line_becomes_background_only() {
-        let mut l = lyrics(SyncKind::Syllable, vec![line(&["(Ooh,", "ooh)"])]);
+    fn whole_line_attaches_to_the_previous_line() {
+        let mut first = line(&["Hey", "you"]);
+        first.background.push(VocalGroup::single("there".into(), 1.0, 2.0));
+        let mut l = lyrics(
+            SyncKind::Syllable,
+            vec![first, shifted(&["(ooh,", "ooh)"], 2.0), shifted(&["(yeah)"], 4.0), shifted(&["Next"], 5.0)],
+        );
         split_background(&mut l);
         l.sort();
+        assert_eq!(l.lines.len(), 2);
+        let bg = &l.lines[0].background;
+        assert_eq!(bg.len(), 3);
+        assert_eq!(bg[0].text(), "there");
+        assert_eq!(bg[1].text(), "Ooh, ooh");
+        assert_eq!((bg[1].start, bg[1].end), (2.0, 4.0));
+        assert_eq!(bg[2].text(), "Yeah");
+        assert_eq!(l.lines[0].full_end(), 5.0);
+        assert_eq!(l.lines[1].lead.text(), "Next");
+    }
+
+    #[test]
+    fn whole_first_line_becomes_background_only() {
+        let mut l = lyrics(SyncKind::Syllable, vec![line(&["(Ooh,", "ooh)"]), shifted(&["Hey"], 2.0)]);
+        split_background(&mut l);
+        l.sort();
+        assert_eq!(l.lines.len(), 2);
         assert!(l.lines[0].background_only);
         assert_eq!(l.lines[0].lead.text(), "Ooh, ooh");
     }
