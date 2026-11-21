@@ -1435,7 +1435,10 @@ mod tests {
         assert!(matches!(&app.overlay, Overlay::Library(d) if d.view == library_ui::View::Library));
         app.on_event(Event::Paste("1\n00:00:01,000 --> 00:00:02,000\nsaved line\n".into()));
         press(&mut app, KeyCode::Enter);
-        let msg = msg_rx.recv().await.unwrap();
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(10), msg_rx.recv())
+            .await
+            .expect("the import never finished")
+            .unwrap();
         app.on_msg(msg);
         assert!(matches!(app.overlay, Overlay::None));
         match &app.lyrics {
@@ -1453,9 +1456,14 @@ mod tests {
         press(&mut app, KeyCode::Char('L'));
         press(&mut app, KeyCode::Char('i'));
         press(&mut app, KeyCode::Enter);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Right);
         app.on_event(Event::Paste("[00:01.00]temporary line".into()));
         press(&mut app, KeyCode::Enter);
-        let msg = msg_rx.recv().await.unwrap();
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(10), msg_rx.recv())
+            .await
+            .expect("the import never finished")
+            .unwrap();
         app.on_msg(msg);
         assert!(app.temporary.is_some());
         assert_eq!(app.library.entries().len(), 1);
