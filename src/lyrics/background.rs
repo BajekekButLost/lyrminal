@@ -390,6 +390,9 @@ mod tests {
         let l = fixed(&["(Yeah),", "I'm", "here,", "(yeah)"]);
         assert_eq!(l.lead.text(), "I'm here");
         assert_eq!(l.background[0].text(), "Yeah, yeah");
+        let l = fixed(&["Hey,", "(yeah),", "you", "(you),"]);
+        assert_eq!(l.lead.text(), "Hey, you");
+        assert_eq!(l.background[0].text(), "Yeah, you");
     }
 
     fn shifted(words: &[&str], by: f64) -> LyricLine {
