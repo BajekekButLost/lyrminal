@@ -1204,8 +1204,7 @@ mod tests {
         let mut st = SettingsState::new();
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some(crate::providers::local::ID));
-        st.item = 1;
-        assert_eq!(st.items(&cfg)[1].label, DEFAULT_LIBRARY_LABEL);
+        st.item = st.items(&cfg).iter().position(|i| i.label == DEFAULT_LIBRARY_LABEL).unwrap();
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         paste(&mut st, &format!("{}/my", dir.display()));
         handle_key(&mut st, &mut cfg, key(KeyCode::Tab, KeyModifiers::NONE));
