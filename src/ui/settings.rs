@@ -630,7 +630,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
             items: vec![
                 item(
                     "Prefer synced lyrics",
-                    "If a higher-priority provider only has unsynced lyrics, keep asking the next ones for a synced version.",
+                    "Ask the providers for the best sync: word sync beats line sync, which beats unsynced lyrics. When several have the same kind, the priority order decides. Off: use the first provider that has any lyrics.",
                     Kind::Toggle {
                         get: |c| c.providers.prefer_synced,
                         set: |c, v| c.providers.prefer_synced = v,
