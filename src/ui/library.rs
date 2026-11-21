@@ -104,15 +104,17 @@ pub struct LibraryDialog {
     pub error: Option<String>,
     pub notice: Option<String>,
     pub seq: u64,
+    pub start_dir: Option<String>,
 }
 
 impl LibraryDialog {
-    pub fn new(track: Option<(TrackQuery, String)>, mut entries: Vec<Entry>, seq: u64) -> Self {
+    pub fn new(track: Option<(TrackQuery, String)>, mut entries: Vec<Entry>, seq: u64, start_dir: Option<String>) -> Self {
         sort_entries(&mut entries);
         Self {
             track,
             view: View::Library,
             form: Form::default(),
+            start_dir,
             pasted: None,
             editing: None,
             selected: 0,
@@ -159,7 +161,10 @@ impl LibraryDialog {
     }
 
     pub fn open_import(&mut self) {
-        self.form = Form::default();
+        self.form = Form {
+            path: self.start_dir.clone().unwrap_or_default(),
+            ..Form::default()
+        };
         self.pasted = None;
         self.view = View::Import;
         self.selected = 0;
@@ -220,6 +225,11 @@ impl LibraryDialog {
                 self.select_row(Row::Location);
                 return None;
             }
+            SourceKind::File if expand_path(&location).is_dir() => {
+                self.error = Some("That is a folder; type or Tab-complete a lyrics file inside it".into());
+                self.select_row(Row::Location);
+                return None;
+            }
             SourceKind::Url if location.is_empty() => {
                 self.error = Some("Type the URL of a lyrics file first".into());
                 self.select_row(Row::Location);
@@ -267,7 +277,7 @@ fn common_prefix(a: &str, b: &str) -> usize {
         .unwrap_or(0)
 }
 
-pub fn complete_path(input: &str) -> Option<String> {
+pub fn complete_path(input: &str, dirs_only: bool) -> Option<String> {
     let split = input.rfind('/').map(|i| i + 1).unwrap_or(0);
     let (dir_part, prefix) = input.split_at(split);
     let dir = if dir_part.is_empty() { expand_path(".") } else { expand_path(dir_part) };
@@ -277,7 +287,8 @@ pub fn complete_path(input: &str) -> Option<String> {
         .filter_map(|e| {
             let name = e.file_name().to_string_lossy().into_owned();
             let hidden_ok = prefix.starts_with('.') || !name.starts_with('.');
-            (name.starts_with(prefix) && hidden_ok).then(|| (name, e.path().is_dir()))
+            let is_dir = e.path().is_dir();
+            (name.starts_with(prefix) && hidden_ok && (is_dir || !dirs_only)).then_some((name, is_dir))
         })
         .collect();
     if matches.is_empty() {
@@ -304,7 +315,7 @@ fn edit_key(d: &mut LibraryDialog, key: KeyEvent) {
             d.error = None;
         }
         KeyCode::Tab if d.form.source == SourceKind::File => {
-            if let Some(done) = complete_path(buf) {
+            if let Some(done) = complete_path(buf, false) {
                 *buf = done;
             }
         }
@@ -494,7 +505,7 @@ mod tests {
             artists: vec!["Artist".into()],
             ..Default::default()
         };
-        let mut d = LibraryDialog::new(Some((q, "id".into())), Vec::new(), 1);
+        let mut d = LibraryDialog::new(Some((q, "id".into())), Vec::new(), 1, None);
         d.open_import();
         d
     }
@@ -521,7 +532,7 @@ mod tests {
     #[test]
     fn opens_on_the_library_and_imports_on_demand() {
         let entries = ["a", "b", "c", "d", "e"].map(saved).to_vec();
-        let mut d = LibraryDialog::new(None, entries, 1);
+        let mut d = LibraryDialog::new(None, entries, 1, None);
         d.columns = 3;
         assert_eq!(d.view, View::Library);
         assert_eq!(d.current(), Some(Row::Add));
@@ -559,6 +570,30 @@ mod tests {
         assert_eq!(d.form.source, SourceKind::File);
         assert!(d.form.url.is_empty());
         assert!(d.pasted.is_none());
+    }
+
+    #[test]
+    fn imports_start_in_the_default_folder() {
+        let dir = std::env::temp_dir().join(format!("lyrminal-start-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("song.lrc"), "").unwrap();
+        let start = format!("{}/", dir.display());
+        let q = TrackQuery {
+            title: "Song".into(),
+            ..Default::default()
+        };
+        let mut d = LibraryDialog::new(Some((q, "id".into())), Vec::new(), 1, Some(start.clone()));
+        handle_key(&mut d, key(KeyCode::Char('i')));
+        assert_eq!(d.form.path, start);
+        d.selected = 5;
+        assert!(matches!(handle_key(&mut d, key(KeyCode::Enter)), Outcome::None));
+        assert_eq!(d.current(), Some(Row::Location));
+        handle_key(&mut d, key(KeyCode::Enter));
+        handle_key(&mut d, key(KeyCode::Char('s')));
+        handle_key(&mut d, key(KeyCode::Tab));
+        handle_key(&mut d, key(KeyCode::Enter));
+        assert_eq!(d.form.path, format!("{start}song.lrc"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -626,9 +661,10 @@ mod tests {
         std::fs::write(dir.join("song-one.lrc"), "").unwrap();
         std::fs::write(dir.join("song-two.lrc"), "").unwrap();
         let base = format!("{}/", dir.display());
-        assert_eq!(complete_path(&format!("{base}song-o")), Some(format!("{base}song-one.lrc")));
-        assert_eq!(complete_path(&format!("{base}songs")), Some(format!("{base}songs/")));
-        assert_eq!(complete_path(&format!("{base}so")), Some(format!("{base}song")));
+        assert_eq!(complete_path(&format!("{base}song-o"), false), Some(format!("{base}song-one.lrc")));
+        assert_eq!(complete_path(&format!("{base}songs"), false), Some(format!("{base}songs/")));
+        assert_eq!(complete_path(&format!("{base}so"), false), Some(format!("{base}song")));
+        assert_eq!(complete_path(&format!("{base}so"), true), Some(format!("{base}songs/")));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

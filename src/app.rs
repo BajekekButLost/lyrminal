@@ -1028,7 +1028,8 @@ impl App {
             .map(|t| (t.query(), t.identity_key()));
         self.library_seq += 1;
         let entries = self.library.entries();
-        self.overlay = Overlay::Library(LibraryDialog::new(track, entries, self.library_seq));
+        let start = self.cfg.providers.local_library.import_start();
+        self.overlay = Overlay::Library(LibraryDialog::new(track, entries, self.library_seq, start));
     }
 
     fn close_library(&mut self) {
