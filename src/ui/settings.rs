@@ -69,6 +69,42 @@ fn tolerance_desc() -> &'static str {
 
 pub fn provider_page(id: &str) -> Vec<Item> {
     match id {
+        crate::providers::local::ID => vec![
+            item(
+                "Enabled",
+                "Use lyrics you added yourself. Press L to open the library and import a file, a URL or the clipboard for the playing track.",
+                Kind::Toggle {
+                    get: |c| c.providers.is_enabled(crate::providers::local::ID),
+                    set: |c, v| c.providers.set_enabled(crate::providers::local::ID, v),
+                },
+            ),
+            item(
+                "Duration tolerance",
+                "Lyrics saved for another copy of a song, such as the same track in a different player, are used when the title and artist match and the length differs by at most this much.",
+                Kind::Number {
+                    min: 0.5,
+                    max: 10.0,
+                    step: 0.5,
+                    decimals: 1,
+                    unit: "s",
+                    get: |c| c.providers.local_library.duration_tolerance_secs,
+                    set: |c, v| c.providers.local_library.duration_tolerance_secs = v,
+                },
+            ),
+            item(
+                "Formats",
+                "LRC and enhanced LRC, TTML (Apple Music and AMLL), SRT, WebVTT, ASS/SSA, SBV, SAMI, JSON (Spotify, LRCLIB and Apple Music) and plain text. The format is detected automatically.",
+                Kind::Info,
+            ),
+            item(
+                "Storage",
+                &format!(
+                    "Saved lyrics and the library index live in {}. Lyrics that check for changes re-read their file or URL every time they load and fall back to the saved copy.",
+                    crate::library::Library::default().dir().display()
+                ),
+                Kind::Info,
+            ),
+        ],
         crate::providers::spicy::ID => vec![
             item(
                 "Enabled",
