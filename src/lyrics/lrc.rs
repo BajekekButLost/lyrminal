@@ -1,6 +1,6 @@
 use super::{Credits, LyricLine, Lyrics, Syllable, SyncKind, VocalGroup};
 
-fn parse_timestamp(s: &str) -> Option<f64> {
+pub fn parse_timestamp(s: &str) -> Option<f64> {
     let s = s.trim();
     let mut parts = s.split(':');
     let a = parts.next()?;

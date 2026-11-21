@@ -1,6 +1,7 @@
 mod anim;
 mod app;
 mod config;
+mod library;
 mod lyrics;
 mod player;
 mod providers;
