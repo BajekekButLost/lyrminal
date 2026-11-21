@@ -1370,7 +1370,7 @@ mod tests {
         for (name, style, t) in [("spring", VisualStyle::Spring, 4.6), ("spring-held", VisualStyle::Spring, 6.4), ("bloom", VisualStyle::Bloom, 4.6)] {
             let mut appearance = AppearanceConfig::default();
             appearance.style = style;
-            let prepared = prepare(&lyrics, PrepareOptions { interludes: true, interlude_threshold: 3.0, extend_lines: style == VisualStyle::Bloom, join_split_words: false });
+            let prepared = prepare(&lyrics, PrepareOptions { interludes: true, interlude_threshold: 3.0, extend_lines: style == VisualStyle::Bloom, join_split_words: false, fix_background: false });
             let theme = Theme::build(&appearance, Some(Palette { dominant: Rgb::new(0.12, 0.1, 0.25), accent: Rgb::new(0.85, 0.35, 0.55) }), None);
             let lyrics_cfg = LyricsConfig::default();
             let scroll_cfg = crate::config::ScrollConfig::default();
@@ -1412,7 +1412,7 @@ mod tests {
             let mut renderer = PixelRenderer::new(load_fonts());
             let mut appearance = AppearanceConfig::default();
             appearance.style = style;
-            let prepared = prepare(&lyrics, PrepareOptions { interludes: true, interlude_threshold: 3.0, extend_lines: style == VisualStyle::Bloom, join_split_words: false });
+            let prepared = prepare(&lyrics, PrepareOptions { interludes: true, interlude_threshold: 3.0, extend_lines: style == VisualStyle::Bloom, join_split_words: false, fix_background: false });
             let theme = Theme::build(&appearance, Some(Palette { dominant: Rgb::new(0.12, 0.1, 0.25), accent: Rgb::new(0.85, 0.35, 0.55) }), None);
             let lyrics_cfg = LyricsConfig::default();
             let scroll_cfg = crate::config::ScrollConfig::default();

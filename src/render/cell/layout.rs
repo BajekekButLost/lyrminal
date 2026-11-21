@@ -541,6 +541,7 @@ mod tests {
                 interlude_threshold: 3.0,
                 extend_lines: false,
                 join_split_words: false,
+                fix_background: false,
             },
         );
         let l = build(
