@@ -22,14 +22,20 @@ pub struct Outcome {
 }
 
 pub async fn fetch_candidate(registry: &Registry, cache: &Cache, c: &Candidate, bypass_cache: bool) -> ProviderResult<Lyrics> {
-    if !bypass_cache && let Some(l) = cache.get_lyrics(&c.provider, &c.id) {
+    let cacheable = super::cacheable(&c.provider);
+    if cacheable
+        && !bypass_cache
+        && let Some(l) = cache.get_lyrics(&c.provider, &c.id)
+    {
         return Ok(l);
     }
     let provider = registry
         .get(&c.provider)
         .ok_or_else(|| ProviderError::NotConfigured(format!("{} is disabled", super::provider_name(&c.provider))))?;
     let lyrics = provider.fetch(c).await?;
-    cache.put_lyrics(&c.provider, &c.id, &lyrics);
+    if cacheable {
+        cache.put_lyrics(&c.provider, &c.id, &lyrics);
+    }
     Ok(lyrics)
 }
 
@@ -67,12 +73,13 @@ pub async fn resolve(
             });
             continue;
         }
-        let cached = if bypass_cache { None } else { cache.get_lookup(p.id(), &key) };
+        let cacheable = super::cacheable(p.id());
+        let cached = if bypass_cache || !cacheable { None } else { cache.get_lookup(p.id(), &key) };
         let looked = match cached {
             Some(hit) => Ok(hit),
             None => {
                 let r = p.lookup(q).await;
-                if let Ok(v) = &r {
+                if cacheable && let Ok(v) = &r {
                     cache.put_lookup(p.id(), &key, v);
                 }
                 r
