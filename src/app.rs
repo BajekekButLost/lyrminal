@@ -1477,7 +1477,11 @@ impl App {
             self.state.save();
         }
         self.toast = None;
-        self.guide = Some(Onboarding::new());
+        let mut guide = Onboarding::new();
+        if !self.cfg.providers.local_library.default_dir.trim().is_empty() {
+            guide.stores_syncs = Some(true);
+        }
+        self.guide = Some(guide);
         self.guide_go(Step::Player);
     }
 
@@ -1567,6 +1571,13 @@ impl App {
                         let old = self.cfg.clone();
                         set(&mut self.cfg, value);
                         self.apply_config(&old);
+                    }
+                }
+                KeyCode::Tab if rows[sel].is_folder() => {
+                    if let Some(buf) = g.editing.as_mut()
+                        && let Some(done) = library_ui::complete_path(buf, true)
+                    {
+                        *buf = done;
                     }
                 }
                 KeyCode::Backspace => {
@@ -1663,6 +1674,24 @@ impl App {
                 kind => self.guide_change(kind, 1, false),
             },
             GuideRow::Provider(id) => self.guide_toggle_provider(id),
+            GuideRow::Answer(yes) => {
+                let Some(mut g) = self.guide.take() else { return };
+                g.stores_syncs = Some(*yes);
+                if *yes {
+                    let rows = g.rows(self);
+                    if let Some(i) = rows.iter().position(GuideRow::is_folder) {
+                        g.selected = i;
+                        let current = self.cfg.providers.local_library.default_dir.clone();
+                        g.editing = Some(if current.is_empty() { "~/".into() } else { current });
+                    }
+                    self.guide = Some(g);
+                } else {
+                    self.guide = Some(g);
+                    if let Some(next) = step.next() {
+                        self.guide_go(next);
+                    }
+                }
+            }
             GuideRow::Next => match step.next() {
                 Some(next) => self.guide_go(next),
                 None => self.finish_onboarding(false),
@@ -1855,6 +1884,12 @@ mod tests {
         assert_eq!(step(&app), Step::Player);
         press(&mut app, KeyCode::Enter);
         press(&mut app, KeyCode::Enter);
+        assert_eq!(step(&app), Step::Library);
+        let shown = screen(&mut app, 160, 40);
+        assert!(shown.iter().any(|l| l.contains("Your own syncs")));
+        assert!(shown.iter().any(|l| l.contains("Yes, I keep sync files")));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Enter);
         assert_eq!(step(&app), Step::Song);
 
         let (lyrics, _) = library::parse("[00:01.00]first line\n[00:05.00]second line\n", &Source::Clipboard, None, Some(30.0)).unwrap();
@@ -1896,6 +1931,33 @@ mod tests {
         app.tick(now + onboarding::ADVANCE_AFTER * 2);
         app.tick(now + onboarding::ADVANCE_AFTER * 4);
         assert_eq!(step(&app), Step::Song);
+    }
+
+    #[tokio::test]
+    async fn tour_offers_a_library_folder_to_people_who_keep_syncs() {
+        let mut app = app();
+        app.guide_go(Step::Library);
+        let rows = app.guide.as_ref().unwrap().rows(&app);
+        assert!(!rows.iter().any(GuideRow::is_folder));
+        assert_eq!(app.guide.as_ref().unwrap().selected, 0);
+        press(&mut app, KeyCode::Enter);
+        let g = app.guide.as_ref().unwrap();
+        assert_eq!(g.stores_syncs, Some(true));
+        assert_eq!(g.editing.as_deref(), Some("~/"));
+        assert!(g.rows(&app)[g.selected].is_folder());
+        let shown = screen(&mut app, 160, 40);
+        assert!(shown.iter().any(|l| l.contains("Library location")));
+        assert!(shown.iter().any(|l| l.contains("Tab complete")));
+
+        let dir = std::env::temp_dir().join(format!("lyrminal-tour-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("syncs-folder")).unwrap();
+        app.guide.as_mut().unwrap().editing = Some(format!("{}/syncs-f", dir.display()));
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.guide.as_ref().unwrap().editing.clone(), Some(format!("{}/syncs-folder/", dir.display())));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.guide.as_ref().unwrap().editing.is_none());
+        assert_eq!(step(&app), Step::Library);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[tokio::test]
