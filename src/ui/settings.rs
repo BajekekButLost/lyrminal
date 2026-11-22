@@ -17,7 +17,11 @@ pub enum SettingsAction {
     ClearCache,
     ResetDefaults,
     Onboarding,
+    Update,
 }
+
+pub const UPDATES_SECTION: &str = "Updates";
+pub const UPDATE_LABEL: &str = "Lyrminal update";
 
 pub enum Kind {
     Toggle {
@@ -881,6 +885,28 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
             ],
         },
         Section {
+            title: UPDATES_SECTION,
+            items: vec![
+                item(UPDATE_LABEL, "", Kind::Action(SettingsAction::Update)),
+                item(
+                    "Check for updates",
+                    "Look for a new release on GitHub when Lyrminal starts and every 12 hours while it runs. Nothing is downloaded unless you install it or turn on automatic installs.",
+                    Kind::Toggle {
+                        get: |c| c.updates.check,
+                        set: |c, v| c.updates.check = v,
+                    },
+                ),
+                item(
+                    "Install updates automatically",
+                    "Download and install a new release as soon as it is found. It takes over the next time Lyrminal starts, or right away if you restart from here.",
+                    Kind::Toggle {
+                        get: |c| c.updates.auto_install,
+                        set: |c, v| c.updates.auto_install = v,
+                    },
+                ),
+            ],
+        },
+        Section {
             title: "About",
             items: vec![
                 item(
@@ -1235,7 +1261,7 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
                 }
             }
             Kind::Action(a) => match a {
-                SettingsAction::PickPlayer | SettingsAction::Onboarding => return SettingsOutcome::Action(*a),
+                SettingsAction::PickPlayer | SettingsAction::Onboarding | SettingsAction::Update => return SettingsOutcome::Action(*a),
                 _ => state.confirm = Some(*a),
             },
             Kind::Number { .. } | Kind::Info => {}

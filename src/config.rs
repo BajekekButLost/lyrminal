@@ -17,6 +17,23 @@ pub struct Config {
     pub sync: SyncConfig,
     pub controls: ControlsConfig,
     pub cache: CacheConfig,
+    pub updates: UpdatesConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct UpdatesConfig {
+    pub check: bool,
+    pub auto_install: bool,
+}
+
+impl Default for UpdatesConfig {
+    fn default() -> Self {
+        Self {
+            check: true,
+            auto_install: false,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -24,6 +24,7 @@ use crate::ui::keys::{self, Action};
 use crate::ui::library::{self as library_ui, ImportRequest, LibraryDialog};
 use crate::ui::onboarding::{self, Onboarding, Row as GuideRow, Step};
 use crate::ui::settings::{self, Kind, SettingsAction, SettingsOutcome, SettingsState};
+use crate::update::{self, Release, Status as UpdateStatus};
 
 const FETCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const TOAST_FOR: Duration = Duration::from_secs(3);
@@ -139,6 +140,9 @@ pub enum AppMsg {
     Fetched { generation: u64, candidate: Candidate, result: Result<Lyrics, String> },
     CacheCleared(Result<(), String>),
     Fonts(Box<Fonts>),
+    UpdateChecked { manual: bool, result: Result<Option<Release>, String> },
+    UpdateProgress { done: u64, total: u64 },
+    UpdateInstalled(Result<std::path::PathBuf, String>),
 }
 
 pub struct App {
@@ -185,6 +189,10 @@ pub struct App {
     pub progress_bar: Option<(u16, u16, u16)>,
     pub scrub: Option<f64>,
     pub ui: UiHits,
+    pub update: UpdateStatus,
+    update_checks: bool,
+    next_update_check: Option<Instant>,
+    pub restart_into: Option<std::path::PathBuf>,
 }
 
 impl App {
@@ -246,6 +254,10 @@ impl App {
             progress_bar: None,
             scrub: None,
             ui: UiHits::default(),
+            update: UpdateStatus::Idle,
+            update_checks: false,
+            next_update_check: None,
+            restart_into: None,
         };
         if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
             app.notify("Spicy Lyrics needs an API key: press Esc → Providers");
@@ -382,6 +394,7 @@ impl App {
             self.follow.manual = false;
             self.dirty = true;
         }
+        self.update_tick(now);
         self.guide_tick(now);
     }
 
@@ -627,6 +640,28 @@ impl App {
                 Ok(()) => self.notify("Cache cleared"),
                 Err(e) => self.notify(format!("Could not clear the cache: {e}")),
             },
+            AppMsg::UpdateChecked { manual, result } => self.on_update_checked(manual, result),
+            AppMsg::UpdateProgress { done, total } => {
+                if let UpdateStatus::Downloading { done: d, total: t, .. } = &mut self.update {
+                    *d = done;
+                    *t = total;
+                }
+            }
+            AppMsg::UpdateInstalled(result) => {
+                let UpdateStatus::Downloading { release, .. } = std::mem::replace(&mut self.update, UpdateStatus::Idle) else {
+                    return;
+                };
+                match result {
+                    Ok(path) => {
+                        self.notify(format!("Lyrminal v{} is installed · restart Lyrminal or press U", release.version));
+                        self.update = UpdateStatus::Installed { release, path };
+                    }
+                    Err(e) => {
+                        self.notify(format!("Update failed: {e}"));
+                        self.update = UpdateStatus::Failed(e);
+                    }
+                }
+            }
         }
     }
 
@@ -932,6 +967,124 @@ impl App {
                 self.apply_config(&old);
                 self.notify("Settings and API keys reset to defaults");
             }
+            SettingsAction::Update => self.update_action(),
+        }
+    }
+
+    pub fn enable_update_checks(&mut self) {
+        self.update_checks = true;
+        self.next_update_check = None;
+    }
+
+    fn update_tick(&mut self, now: Instant) {
+        if !self.update_checks
+            || !self.cfg.updates.check
+            || !matches!(self.update, UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Failed(_))
+            || self.next_update_check.is_some_and(|at| now < at)
+        {
+            return;
+        }
+        self.next_update_check = Some(now + update::CHECK_EVERY);
+        self.check_updates(false);
+    }
+
+    fn check_updates(&mut self, manual: bool) {
+        if self.update.busy() {
+            return;
+        }
+        self.update = UpdateStatus::Checking;
+        self.dirty = true;
+        let client = self.client.clone();
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            let result = update::check(&client).await;
+            let _ = tx.send(AppMsg::UpdateChecked { manual, result });
+        });
+    }
+
+    fn on_update_checked(&mut self, manual: bool, result: Result<Option<Release>, String>) {
+        match result {
+            Ok(Some(release)) => {
+                let installable = release.asset.is_some();
+                let version = release.version.clone();
+                self.update = UpdateStatus::Available(release);
+                if installable && self.cfg.updates.auto_install {
+                    self.notify(format!("Installing Lyrminal v{version}"));
+                    self.install_update();
+                } else if installable {
+                    self.notify(format!("Lyrminal v{version} is available · U to update"));
+                } else {
+                    self.notify(format!("Lyrminal v{version} is available, but there is no prebuilt binary for this system"));
+                }
+            }
+            Ok(None) => {
+                self.update = UpdateStatus::UpToDate;
+                if manual {
+                    self.notify(format!("Lyrminal v{} is up to date", update::CURRENT));
+                }
+            }
+            Err(e) => {
+                if manual {
+                    self.notify(format!("Could not check for updates: {e}"));
+                }
+                self.update = UpdateStatus::Failed(e);
+            }
+        }
+    }
+
+    fn install_update(&mut self) {
+        let UpdateStatus::Available(release) = &self.update else { return };
+        if release.asset.is_none() {
+            self.notify("There is no prebuilt binary for this system: rerun install.sh with --from-source");
+            return;
+        }
+        let release = release.clone();
+        self.update = UpdateStatus::Downloading {
+            release: release.clone(),
+            done: 0,
+            total: release.asset.as_ref().map(|a| a.size).unwrap_or(0),
+        };
+        self.dirty = true;
+        let client = self.client.clone();
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            let mut shown = None;
+            let progress_tx = tx.clone();
+            let result = update::install(&client, &release, move |done, total| {
+                let pct = (total > 0).then(|| done * 100 / total);
+                if pct != shown {
+                    shown = pct;
+                    let _ = progress_tx.send(AppMsg::UpdateProgress { done, total });
+                }
+            })
+            .await;
+            let _ = tx.send(AppMsg::UpdateInstalled(result));
+        });
+    }
+
+    fn update_action(&mut self) {
+        match &self.update {
+            UpdateStatus::Idle | UpdateStatus::UpToDate | UpdateStatus::Failed(_) => self.check_updates(true),
+            UpdateStatus::Available(_) => self.install_update(),
+            UpdateStatus::Checking | UpdateStatus::Downloading { .. } => {}
+            UpdateStatus::Installed { path, .. } => {
+                self.restart_into = Some(path.clone());
+                self.quit = true;
+            }
+        }
+    }
+
+    fn open_updates(&mut self) {
+        let secs = settings::sections(&self.cfg);
+        let Some(section) = secs.iter().position(|s| s.title == settings::UPDATES_SECTION) else { return };
+        let item = secs[section].items.iter().position(|i| i.label == settings::UPDATE_LABEL).unwrap_or(0);
+        self.open_settings();
+        if let Overlay::Settings(s) = &mut self.overlay {
+            s.page = None;
+            s.editing = None;
+            s.confirm = None;
+            s.section = section;
+            s.item = item;
         }
     }
 
@@ -954,6 +1107,12 @@ impl App {
         }
         if json(&self.cfg.player) != json(&old.player) {
             let _ = self.player_tx.send(PlayerCommand::Reconfigure(self.cfg.player.clone()));
+        }
+        if self.cfg.updates.check && !old.updates.check {
+            self.next_update_check = None;
+        }
+        if self.cfg.updates.auto_install && !old.updates.auto_install {
+            self.install_update();
         }
         if json(&self.cfg.cache) != json(&old.cache) {
             self.cache = Cache::new(crate::config::cache_dir(), self.cfg.cache.ttl_days, self.cfg.cache.enabled);
@@ -1342,6 +1501,7 @@ impl App {
             Action::Players => self.open_players(),
             Action::Syncs => self.open_syncs(),
             Action::Library => self.open_library(),
+            Action::Updates => self.open_updates(),
             Action::Refetch => {
                 if self.track.is_some() {
                     if let Some(key) = self.track_key() {
@@ -1998,6 +2158,61 @@ mod tests {
         assert!(app.guide.as_ref().unwrap().editing.is_none());
         assert_eq!(step(&app), Step::Library);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn offers_a_found_update_and_restarts_into_it() {
+        let mut app = app();
+        app.guide = None;
+        let release = Release {
+            version: "9.9.9".into(),
+            tag: "v9.9.9".into(),
+            url: "https://github.com/BajekekButLost/lyrminal/releases/tag/v9.9.9".into(),
+            summary: "Big one.".into(),
+            asset: Some(update::Asset {
+                name: "lyrminal-v9.9.9-x86_64-linux".into(),
+                url: "https://example.com/lyrminal".into(),
+                size: 10,
+            }),
+        };
+        app.on_msg(AppMsg::UpdateChecked {
+            manual: false,
+            result: Ok(Some(release.clone())),
+        });
+        assert!(matches!(&app.update, UpdateStatus::Available(r) if r.version == "9.9.9"));
+        assert!(screen(&mut app, 160, 40)[39].contains("update v9.9.9"));
+
+        press(&mut app, KeyCode::Char('U'));
+        let Overlay::Settings(s) = &app.overlay else { panic!("settings should be open") };
+        assert_eq!(settings::sections(&app.cfg)[s.section].title, settings::UPDATES_SECTION);
+        let shown = screen(&mut app, 160, 40);
+        assert!(shown.iter().any(|l| l.contains("v9.9.9 available · install ↵")));
+        assert!(shown.iter().any(|l| l.contains("Big one.")));
+
+        app.update = UpdateStatus::Downloading { release, done: 0, total: 10 };
+        app.on_msg(AppMsg::UpdateProgress { done: 5, total: 10 });
+        assert!(screen(&mut app, 160, 40).iter().any(|l| l.contains("downloading 50%")));
+        let path = std::path::PathBuf::from("/tmp/lyrminal-new");
+        app.on_msg(AppMsg::UpdateInstalled(Ok(path.clone())));
+        assert!(matches!(app.update, UpdateStatus::Installed { .. }));
+        press(&mut app, KeyCode::Enter);
+        assert!(app.quit);
+        assert_eq!(app.restart_into, Some(path));
+    }
+
+    #[tokio::test]
+    async fn quiet_checks_only_speak_up_for_news() {
+        let mut app = app();
+        app.toast = None;
+        app.on_msg(AppMsg::UpdateChecked { manual: false, result: Ok(None) });
+        assert!(matches!(app.update, UpdateStatus::UpToDate));
+        assert!(app.toast.is_none());
+        app.on_msg(AppMsg::UpdateChecked { manual: false, result: Err("offline".into()) });
+        assert!(app.toast.is_none());
+        app.on_msg(AppMsg::UpdateChecked { manual: true, result: Ok(None) });
+        assert!(app.toast.as_ref().is_some_and(|(m, _)| m.contains("is up to date")));
+        app.tick(Instant::now());
+        assert!(matches!(app.update, UpdateStatus::UpToDate));
     }
 
     #[tokio::test]
