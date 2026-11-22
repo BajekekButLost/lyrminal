@@ -957,7 +957,7 @@ impl PixelRenderer {
                 }
                 (_, SyncKind::Line, VisualStyle::Spring) => {
                     let p = process::progress(t, line.start, line.end);
-                    lerp(spring::LINE_UNLIT as f64, spring::ACTIVE_LIT as f64, effects::vertical_fill(p, 0.5)) as f32
+                    lerp(spring::LINE_UNLIT as f64, spring::ACTIVE_LIT as f64, p) as f32
                 }
                 _ => 0.6,
             };

@@ -67,10 +67,6 @@ pub fn spring_fill(progress: f64, x_frac: f64) -> f64 {
     clamp01((gp + 20.0 - x_frac * 100.0) / 20.0)
 }
 
-pub fn vertical_fill(progress: f64, y_frac: f64) -> f64 {
-    spring_fill(progress, y_frac)
-}
-
 pub fn spring_letter_window(start: f64, end: f64, n: usize, i: usize) -> (f64, f64) {
     let span_end = (end - spring::LETTER_TAIL).max(start + 0.01);
     let each = (span_end - start) / n.max(1) as f64;

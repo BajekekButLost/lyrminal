@@ -47,8 +47,6 @@ pub struct Row {
     pub glyphs: Vec<Glyph>,
     pub width: u16,
     pub align: Align,
-    pub row_in_group: usize,
-    pub rows_in_group: usize,
     pub links: Vec<RowLink>,
 }
 
@@ -201,19 +199,15 @@ fn plain_tokens(text: &str) -> Vec<Token> {
 }
 
 fn rows_from(glyph_rows: Vec<Vec<Glyph>>, kind: RowKind, align: Align, link: Option<String>) -> Vec<Row> {
-    let n = glyph_rows.len();
     glyph_rows
         .into_iter()
-        .enumerate()
-        .map(|(i, glyphs)| {
+        .map(|glyphs| {
             let width = glyphs.last().map(|g| g.col + g.width).unwrap_or(0);
             Row {
                 width,
                 kind: kind.clone(),
                 glyphs,
                 align,
-                row_in_group: i,
-                rows_in_group: n,
                 links: link
                     .iter()
                     .map(|url| RowLink {
@@ -269,8 +263,6 @@ fn joined_row(segments: &[(String, Option<String>)], kind: RowKind, align: Align
         kind,
         glyphs,
         align,
-        row_in_group: 0,
-        rows_in_group: 1,
         links,
     }
 }
@@ -358,8 +350,6 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
                 glyphs: Vec::new(),
                 width: 5,
                 align,
-                row_in_group: 0,
-                rows_in_group: 1,
                 links: Vec::new(),
             }),
             ItemKind::Line(li) => {
@@ -429,8 +419,6 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
                 glyphs: Vec::new(),
                 width: 0,
                 align,
-                row_in_group: 0,
-                rows_in_group: 1,
                 links: Vec::new(),
             });
         }
