@@ -525,9 +525,7 @@ impl CellRenderer {
                     State::Active => {
                         if kind == SyncKind::Line {
                             let p = process::progress(t, it.start, prepared.lyrics.lines[li].end);
-                            let y = (row.row_in_group as f64 + 0.5) / row.rows_in_group.max(1) as f64;
-                            let fill = effects::vertical_fill(p, y);
-                            ink.alpha = lerp(spring::LINE_UNLIT as f64, lit as f64, fill) as f32;
+                            ink.alpha = lerp(spring::LINE_UNLIT as f64, lit as f64, p) as f32;
                             if input.appearance.glow {
                                 ink.glow = (effects::SPLINES.line_glow.at(p) * 0.45) as f32;
                             }
