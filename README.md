@@ -62,6 +62,7 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 - **Mouse support**: wheel scrolling and clicking through lyrics, dialogs and settings.
 - **In-app settings** for everything, plus a short welcome tour on first launch.
 - **Cached lyrics**, so repeat plays need no requests.
+- **In-app updates**: get told about new releases and install them without leaving Lyrminal.
 
 ## Requirements
 
@@ -79,7 +80,7 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 curl -fsSL https://raw.githubusercontent.com/BajekekButLost/lyrminal/main/install.sh | sh
 ```
 
-It downloads the latest release to `~/.local/bin/lyrminal`. Where there's no prebuilt binary (anything other than Linux x86_64), it builds from source with `cargo` instead. Run the same command again to update.
+It downloads the latest release to `~/.local/bin/lyrminal`. Where there's no prebuilt binary (anything other than Linux x86_64), it builds from source with `cargo` instead. Run the same command again to update, or [update from inside the app](#updating).
 
 Pass options after `sh -s --`:
 
@@ -119,6 +120,15 @@ cargo install --path . --locked
 ```
 
 To update, pull and run the same `cargo install` command again.
+
+### Updating
+
+Lyrminal looks for a new release on GitHub when it starts and every 12 hours while it runs. When one is out, it says so and shows "update vX.Y.Z" in the status bar. Press `U` (or click that) to open Settings → Updates, then Enter to download it. The download is checked with `--version` before it replaces the running copy, and Enter once more restarts into the new version. Otherwise the new version starts the next time you open Lyrminal.
+
+- **Check for updates** (on by default): turn it off and Lyrminal never contacts GitHub on its own. Enter on "Lyrminal update" still checks by hand.
+- **Install updates automatically** (off by default): download and install a new release as soon as it is found.
+
+In-app updates need a prebuilt binary for your system (Linux x86_64) and write access to the folder Lyrminal is in. Builds running from a `cargo build` `target/` folder don't update themselves; pull and rebuild them instead.
 
 ## Quick start
 

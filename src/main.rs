@@ -10,6 +10,7 @@ mod state;
 mod term;
 mod theme;
 mod ui;
+mod update;
 
 use std::io::Write;
 use std::time::{Duration, Instant};
@@ -75,6 +76,7 @@ async fn main() -> Result<()> {
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
     let mut app = App::new(cfg, caps, player_tx, msg_tx);
     app.maybe_onboard(fresh);
+    app.enable_update_checks();
     let mut gfx = Graphics::default();
 
     let result = run(&mut terminal, &mut app, &mut gfx, player_rx, msg_rx, &mut mouse).await;
@@ -88,6 +90,13 @@ async fn main() -> Result<()> {
     }
     let _ = execute!(out, DisableBracketedPaste);
     ratatui::restore();
+    if result.is_ok()
+        && let Some(path) = app.restart_into.take()
+    {
+        let e = update::restart(&path);
+        eprintln!("lyrminal: could not start {}: {e}", path.display());
+        std::process::exit(1);
+    }
     result
 }
 

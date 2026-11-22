@@ -12,6 +12,7 @@ Press `?` in the app for this list.
 | `s` | Search all providers and pick another sync |
 | `L` / `F3` | Local library: add your own lyrics from a file, URL or the clipboard |
 | `R` / `F5` | Fetch the lyrics again, skipping the cache |
+| `U` | Updates: check for, install and restart into a new version |
 | `Tab` / `Shift+Tab` | In dialogs: jump to the next / previous category |
 | `q` / `Ctrl+C` | Quit |
 

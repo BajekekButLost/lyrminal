@@ -476,6 +476,9 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     if app.follow.manual {
         right_parts.push(("scrolling · f to follow".into(), Some(Action::Follow)));
     }
+    if let Some(hint) = app.update.hint() {
+        right_parts.push((hint, Some(Action::Updates)));
+    }
     right_parts.push(("? help".into(), Some(Action::Help)));
     let joined = right_parts.iter().map(|(s, _)| s.as_str()).collect::<Vec<_>>().join(" · ");
     let right = format!("{joined}  ");
@@ -647,6 +650,8 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
                 _ => buf.to_string(),
             };
             format!("{shown}▏")
+        } else if matches!(it.kind, Kind::Action(settings::SettingsAction::Update)) {
+            app.update.value()
         } else if is_sel && matches!(it.kind, Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset) {
             format!("‹ {} ›", settings::value_text(&app.cfg, &it.kind))
         } else {
@@ -689,12 +694,15 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
             settings::SettingsAction::ResetDefaults => "reset every setting and API key",
             settings::SettingsAction::PickPlayer => "pick a player",
             settings::SettingsAction::Onboarding => "start the welcome tour",
+            settings::SettingsAction::Update => "update Lyrminal",
         };
         format!("Press y or click it again to {what}, any other key to cancel.")
     } else if state.editing.is_some() && items.get(selected).is_some_and(|i| matches!(i.kind, Kind::Text { folder: true, .. })) {
         "Type or paste a folder, Tab to complete it, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
     } else if state.editing.is_some() {
         "Type or paste, Enter to save, Esc to cancel, Ctrl-U to clear.".to_string()
+    } else if items.get(selected).is_some_and(|i| matches!(i.kind, Kind::Action(settings::SettingsAction::Update))) {
+        app.update.desc()
     } else {
         items.get(selected).map(|i| i.desc.clone()).unwrap_or_default()
     };
