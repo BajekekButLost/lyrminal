@@ -73,6 +73,29 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 
 ## Installation
 
+### Install script
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BajekekButLost/lyrminal/main/install.sh | sh
+```
+
+It downloads the latest release to `~/.local/bin/lyrminal`. Where there's no prebuilt binary (anything other than Linux x86_64), it builds from source with `cargo` instead. Run the same command again to update.
+
+Pass options after `sh -s --`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/BajekekButLost/lyrminal/main/install.sh | sh -s -- --version v1.0.0 --dir ~/bin
+```
+
+| Option | What it does |
+| --- | --- |
+| `-v`, `--version <vX.Y.Z>` | Install a specific version instead of the latest |
+| `-d`, `--dir <path>` | Install somewhere other than `~/.local/bin` |
+| `-s`, `--from-source` | Build with `cargo` even when a prebuilt binary exists |
+| `-f`, `--force` | Reinstall even if that version is already installed |
+
+`LYRMINAL_VERSION` and `LYRMINAL_INSTALL_DIR` work the same as `--version` and `--dir`.
+
 ### Prebuilt binary
 
 Download `lyrminal-vX.Y.Z-x86_64-linux` from the [latest release](https://github.com/BajekekButLost/lyrminal/releases/latest), then:
