@@ -357,6 +357,7 @@ pub struct LyricsConfig {
     pub fix_background_lines: bool,
     pub interludes: bool,
     pub interlude_threshold_secs: f64,
+    pub reserve_interlude_space: bool,
     pub join_split_words: bool,
     pub resume_follow_secs: f64,
 }
@@ -370,6 +371,7 @@ impl Default for LyricsConfig {
             fix_background_lines: false,
             interludes: true,
             interlude_threshold_secs: 3.0,
+            reserve_interlude_space: false,
             join_split_words: false,
             resume_follow_secs: 4.0,
         }
@@ -467,6 +469,7 @@ impl Preset {
         cfg.lyrics.background_vocals = true;
         cfg.lyrics.interludes = true;
         cfg.lyrics.interlude_threshold_secs = d.lyrics.interlude_threshold_secs;
+        cfg.lyrics.reserve_interlude_space = d.lyrics.reserve_interlude_space;
         cfg.lyrics.join_split_words = false;
         match self {
             Preset::SpicyLyrics => {

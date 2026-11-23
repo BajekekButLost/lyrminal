@@ -39,6 +39,7 @@ pub struct Scroller {
     tweens: HashMap<usize, Tween>,
     last_target: Option<usize>,
     initialized: bool,
+    jumped: bool,
 }
 
 impl Default for Scroller {
@@ -49,6 +50,7 @@ impl Default for Scroller {
             tweens: HashMap::new(),
             last_target: None,
             initialized: false,
+            jumped: false,
         }
     }
 }
@@ -79,6 +81,10 @@ impl Scroller {
         self.tweens.get(&item).map(|t| t.value(now)).unwrap_or(0.0)
     }
 
+    pub fn jumped(&self) -> bool {
+        self.jumped
+    }
+
     pub fn is_animating(&self) -> bool {
         !self.tweens.is_empty() || !self.spring.is_settled()
     }
@@ -99,6 +105,7 @@ impl Scroller {
         let speed = speed.clamp(0.1, 5.0);
         self.spring.frequency = if manual { speed * MANUAL_SPEEDUP } else { speed };
         self.tweens.retain(|_, t| !t.done(now));
+        self.jumped = !self.initialized || (desired - self.base).abs() > viewport * 1.5;
         if !self.initialized {
             self.initialized = true;
             self.spring.snap(desired);
@@ -106,7 +113,7 @@ impl Scroller {
             self.last_target = Some(target);
             return;
         }
-        let jump = (desired - self.base).abs() > viewport * 1.5;
+        let jump = self.jumped;
         if manual || mode == ScrollMode::Rigid {
             if !self.tweens.is_empty() {
                 self.tweens.clear();

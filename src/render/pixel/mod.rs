@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 
 use self::raster::{Canvas, Mask};
 use super::effects::{self, EdgeWord, bloom, spring};
+use super::interlude::InterludeSpace;
 use super::lineanim::LineAnims;
 use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput, push_px_hit};
@@ -140,6 +141,7 @@ struct PLayout {
     key: LayoutKey,
     blocks: Vec<PBlock>,
     item_tops: Vec<f64>,
+    items_end: f64,
     total: f32,
     credits_top: f32,
     content_w: f32,
@@ -210,6 +212,7 @@ pub struct PixelRenderer {
     pub canvas: Canvas,
     layout: Option<PLayout>,
     scroller: Scroller,
+    space: InterludeSpace,
     masks: HashMap<MaskKey, (Mask, u64)>,
     glows: HashMap<CacheKey, Mask>,
     anims: HashMap<AnimKey, SylAnim>,
@@ -341,6 +344,7 @@ impl PixelRenderer {
             canvas: Canvas::new(1, 1),
             layout: None,
             scroller: Scroller::default(),
+            space: InterludeSpace::default(),
             masks: HashMap::new(),
             glows: HashMap::new(),
             anims: HashMap::new(),
@@ -358,6 +362,7 @@ impl PixelRenderer {
         self.clear_springs();
         self.lines.reset();
         self.scroller.reset();
+        self.space.reset();
     }
 
     fn clear_springs(&mut self) {
@@ -534,6 +539,7 @@ impl PixelRenderer {
             key,
             blocks,
             item_tops,
+            items_end: top as f64,
             credits_top: top + size * 0.4,
             total: top + size * 3.0,
             content_w,
@@ -707,16 +713,22 @@ impl PixelRenderer {
         if self.layout.as_ref().is_none_or(|l| l.key != key) {
             self.build_layout(input.prepared, key, content_w, input);
             self.scroller.reset();
+            self.space.reset();
         }
         let prepared = input.prepared;
         let kind = prepared.lyrics.kind;
         let t = if style == VisualStyle::Bloom { input.t - bloom::CLOCK_LAG } else { input.t };
         let anchor = (lh * 0.4) as f64;
         let (target, silence) = input.scroll_target(t);
-        let (item_tops, total, credits_top) = {
+        let (total, credits_top) = {
             let l = self.layout.as_ref().unwrap();
-            (l.item_tops.clone(), l.total, l.credits_top)
+            (l.total, l.credits_top)
         };
+        let mut spacing = {
+            let l = self.layout.as_ref().unwrap();
+            self.space.settle(prepared, &l.item_tops, l.items_end, t, target, input.wall, input.lyrics.reserve_interlude_space)
+        };
+        let item_tops = spacing.tops.clone();
         let auto_desired = if kind == SyncKind::Static {
             -(ch as f64)
         } else {
@@ -736,15 +748,20 @@ impl PixelRenderer {
             manual,
             speed: input.scroll.speed,
         });
+        if self.scroller.jumped() {
+            self.space.snap();
+        }
+        self.space.show(&mut spacing, input.wall);
         let base = self.scroller.base();
         info.base = if manual { input.follow.offset } else { auto_desired / ch as f64 };
-        info.total = total as f64 / ch as f64;
+        info.total = (total as f64 - spacing.hidden_total()) / ch as f64;
         info.viewport = lh as f64 / ch as f64;
         if input.follow.manual {
             let probe = base + anchor;
             info.cursor_item = item_tops
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| spacing.is_open(*i))
                 .min_by(|a, b| (a.1 - probe).abs().partial_cmp(&(b.1 - probe).abs()).unwrap_or(std::cmp::Ordering::Equal))
                 .map(|(i, _)| i);
         }
@@ -752,7 +769,7 @@ impl PixelRenderer {
         let contrast = input.appearance.contrast;
         let text = input.theme.text;
         let glow_color = input.theme.accent.mix(Rgb::WHITE, 0.45);
-        let mut animating = self.scroller.is_animating();
+        let mut animating = self.scroller.is_animating() || self.space.is_animating();
         let block_count = self.layout.as_ref().map(|l| l.blocks.len()).unwrap_or(0);
         self.lines.begin_frame();
         for bi in 0..block_count {
@@ -760,7 +777,7 @@ impl PixelRenderer {
                 let b = &self.layout.as_ref().unwrap().blocks[bi];
                 (b.item, b.top, b.height)
             };
-            let y = ly + (btop as f64 - base + self.scroller.item_offset(item_idx, input.wall)) as f32;
+            let y = ly + (btop as f64 - spacing.shift(item_idx) - base + self.scroller.item_offset(item_idx, input.wall)) as f32;
             if y > ly + lh + size || y + bheight < ly - size {
                 continue;
             }
@@ -901,7 +918,7 @@ impl PixelRenderer {
             .unwrap_or(0.0);
         PixelFrame {
             info,
-            credits_y: Some(ly + (credits_top as f64 - base + credits_offset) as f32).filter(|cy| *cy < ly + lh),
+            credits_y: Some(ly + (credits_top as f64 - spacing.shift(usize::MAX) - base + credits_offset) as f32).filter(|cy| *cy < ly + lh),
             content_x: x0,
         }
     }

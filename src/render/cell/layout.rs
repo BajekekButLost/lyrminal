@@ -75,6 +75,7 @@ pub struct Layout {
     pub blocks: Vec<Block>,
     pub total: usize,
     pub item_tops: Vec<f64>,
+    pub items_end: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -448,6 +449,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
         });
         top += height + gap;
     }
+    let items_end = top as f64;
 
     if prepared.lyrics.instrumental {
         let rows = text_rows("♪ Instrumental", width, RowKind::Notice, Align::Center, None);
@@ -471,6 +473,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
         blocks,
         total: top,
         item_tops,
+        items_end,
     }
 }
 
