@@ -48,17 +48,17 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 - **Word-, line- and unsynced lyrics** from six sources, all queried at the same time. The best sync wins.
 - **Two renderers**:
   - **Pixel**: real fonts with blur, scaling and glow, drawn with the kitty graphics protocol (the GIFs above).
-  - **Cell**: truecolor terminal text that works in any modern terminal.
+  - **Cell**: truecolor terminal text that works in any modern terminal. Lyrminal falls back to it when the terminal can't show images.
 - **Two animation styles**:
   - **Spring**: a per-word gradient wipe with glow and springy emphasis.
   - **Bloom**: one soft edge sweeping the line, rippling scroll and flame emphasis.
 - **Look presets**: switch between the default "Lyrminal" look and a "Spicy Lyrics" look in one go.
-- **Album-art theming**: lyrics and background take their colours from the album cover, with the cover shown in the header when the terminal can show images.
+- **Album-art theming**: lyrics and background take their colours from the album cover, with the cover shown in the header, with rounded corners, when the terminal can show images.
 - **Duets, background vocals, translations and romanization** when the sync has them. Duet singers sit on opposite sides.
 - **Interlude dots** during instrumental breaks.
 - **Local library**: import your own syncs from a file, the clipboard or a URL, in [many formats](#local-library).
 - **Per-track timing offsets**, set live while the song plays and remembered for next time.
-- **Optional playback controls**: play/pause, seek, skip, scrub the progress bar and click a lyric to jump to it.
+- **Playback controls**: play/pause, seek, skip, scrub the progress bar and click a lyric to jump to it. Turn them off to keep Lyrminal read-only.
 - **Mouse support**: wheel scrolling and clicking through lyrics, dialogs and settings.
 - **In-app settings** for everything, plus a short welcome tour on first launch.
 - **Cached lyrics**, so repeat plays need no requests.
@@ -68,7 +68,7 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 
 - **Linux** with a D-Bus session bus (MPRIS).
 - **A truecolor terminal.**
-- **For the pixel renderer and cover art**: a terminal with the kitty graphics protocol, such as kitty, Ghostty or WezTerm. It doesn't work inside tmux or screen; there Lyrminal uses the cell renderer.
+- **For the pixel renderer and cover art**: a terminal with the kitty graphics protocol, such as kitty, Ghostty or WezTerm. It doesn't work inside tmux or screen. Without it, Lyrminal uses the cell renderer and hides the settings that only work with images.
 - **A music player that speaks MPRIS**: Spotifast, Spotify, most browsers, mpv with an MPRIS plugin, and so on.
 - **Optional, for importing from the clipboard**: `wl-paste` (Wayland), `xclip` or `xsel`.
 
@@ -135,6 +135,7 @@ In-app updates need a prebuilt binary for your system (Linux x86_64) and write a
 1. Start your music player and play something.
 2. Run `lyrminal`.
 3. On the first launch, a short welcome tour docks next to the lyrics and walks you through:
+   - what your terminal can show, when it has no kitty graphics (with a warning if tmux, screen or missing truecolor is in the way),
    - choosing a player,
    - ordering the lyrics providers and adding a Spicy Lyrics key,
    - picking a folder for your own syncs,
@@ -146,10 +147,17 @@ In-app updates need a prebuilt binary for your system (Linux x86_64) and write a
 4. Press `Esc` for settings and `?` for every key.
 
 ```text
-Usage: lyrminal [--help] [--version]
+Usage: lyrminal [options]
 ```
 
-There are no other command-line options: everything is set inside the app.
+| Option | What it does |
+| --- | --- |
+| `-h`, `--help` | Show the options and where the config file is |
+| `-V`, `--version` | Show the version |
+| `--base-directory <dir>` | Use `<dir>` as the home folder for Lyrminal's files, so they go to `<dir>/.config/lyrminal`, `<dir>/.cache/lyrminal` and so on. The folder is created if it doesn't exist |
+| `--temp-base-directory` | The same, in a new randomly named folder in the system temp directory. Its path is printed when you quit, and it is not deleted |
+
+Everything else is set inside the app.
 
 ## Key bindings
 
@@ -229,6 +237,8 @@ Press `L` to open the library. It shows your saved syncs as cards; press `i` or 
 - JSON from Spotify, LRCLIB and Apple Music
 - Plain text (unsynced)
 
+Lines keep the order they have in the file. A line timed out of sequence, such as an unsynced `00:00:00.000` line at the end of a TTML file, stays where it is and is placed right after the line before it.
+
 Library syncs are never cached; they are read from the library itself.
 
 ## Appearance
@@ -238,14 +248,14 @@ Everything below is in Settings → Appearance, and most of it changes live.
 ### Renderers
 
 - **Cell** draws with terminal text. Depth dimming makes lines further from the current one fainter, standing in for blur. Its frame rate defaults to 60 fps.
-- **Pixel** draws real fonts with blur, scaling and glow through the kitty graphics protocol. Each frame is a full image, so its frame rate defaults to a more modest 30 fps. You can pick the font family (empty means the system sans-serif), weight and size in terminal rows.
+- **Pixel** (the default) draws real fonts with blur, scaling and glow through the kitty graphics protocol. Each frame is a full image, so its frame rate defaults to a more modest 30 fps. You can pick the font family (empty means the system sans-serif), weight and size in terminal rows (2 by default).
 
-Press `m` to switch between them. If the terminal doesn't support kitty graphics, Lyrminal stays on the cell renderer.
+Press `m` to switch between them. If the terminal doesn't support kitty graphics, Lyrminal uses the cell renderer. The Renderer, Cover art, Syllable spacing and Pixel frame rate/font/weight/size settings are then hidden, and so is the `m` key.
 
 ### Presets
 
-- **Lyrminal**: the default look.
-- **Spicy Lyrics**: matches the Spicy Lyrics extension, with real fonts and depth blur in the pixel renderer, an album-coloured gradient, syllables that grow on their own and a page that glides as one.
+- **Lyrminal**: the default look: pixel renderer, font size 2 rows, joined syllables, staggered scrolling that starts 250 ms ahead.
+- **Spicy Lyrics**: matches the Spicy Lyrics extension: real fonts and depth blur in the pixel renderer, an album-coloured gradient, a slightly larger font (2.2 rows), glowing words, syllables that grow on their own and a page that glides as one, with no scroll ahead. On terminals without kitty graphics, it brings the colours, glow and gliding page to the cell renderer.
 
 When your look settings no longer match either preset, the Preset setting shows "custom".
 
@@ -255,7 +265,7 @@ When your look settings no longer match either preset, the Preset setting shows 
 | --- | --- |
 | Album art theming | Colours the lyrics and background from the album cover |
 | Background | `none` (keep the terminal background), `solid` or `gradient` |
-| Cover art | Shows the album cover in the header (kitty graphics only) |
+| Cover art | Shows the album cover, with rounded corners, in the header (kitty graphics only) |
 | Track header / Progress bar / Status bar | Show or hide each part of the screen |
 | Alignment | `left` keeps duets on opposite sides, `center` centres every line |
 | Line gap | Blank rows between lyric lines |
@@ -272,7 +282,7 @@ In Settings → Scrolling:
 - **Animation**: `staggered` (each line follows the one above it, rippling down the screen) or `smooth` (the page glides as one).
 - **Speed**: how fast the lyrics move to the next line.
 - **Scroll ahead**: start moving to a line slightly before it's sung.
-- **Resume following after**: how long after you stop scrolling before the lyrics follow the song again.
+- **Resume following after**: how long after you stop scrolling before the lyrics follow the song again (5 s by default).
 
 ### Lyrics options
 
@@ -294,7 +304,7 @@ In Settings → Lyrics:
 
 ## Playback controls
 
-Lyrminal is read-only by default. Turn on Settings → Controls → Playback controls to let it play, pause, seek and skip through MPRIS. You can then also:
+Settings → Controls → Playback controls (on by default) lets Lyrminal play, pause, seek and skip through MPRIS. Turn it off to keep Lyrminal read-only. While it's on, you can also:
 
 - set how far `h` / `l` seek (Seek step),
 - click or drag the progress bar,
@@ -316,7 +326,7 @@ Press `p` to pick from the players that are running right now.
 | `~/.cache/lyrminal/` | Cached lyrics and lookups |
 | `~/.local/share/lyrminal/library/` | Your saved syncs: an `index.json` plus a copy of each file in its original format |
 
-The paths follow your `XDG_*` directories when those are set. Settings are best changed in the app, but the file is plain JSON. Settings → About → Reset all settings restores every default, including API keys.
+The paths follow your `XDG_*` directories when those are set. With `--base-directory <dir>` or `--temp-base-directory`, they go under that folder instead (`<dir>/.config/lyrminal/config.json`, `<dir>/.local/state/lyrminal/state.json` and so on), which is handy for trying a fresh install without touching your own settings. Settings are best changed in the app, but the file is plain JSON. Settings → About → Reset all settings restores every default, including API keys.
 
 **Cache:** fetched lyrics are kept for 7 days by default (Settings → Cache, at most 30 because of Spicy Lyrics' terms). You can turn the cache off or clear it there.
 
