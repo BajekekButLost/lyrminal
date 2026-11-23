@@ -12,7 +12,7 @@ use crate::player::clock::PlaybackClock;
 use crate::player::{MediaKind, PlayerCommand, PlayerEvent, PlayerInfo, Snapshot, Status, TrackMeta};
 use crate::providers::cache::Cache;
 use crate::providers::resolve::{self, Attempt, Outcome, Resolution};
-use crate::providers::{Candidate, Registry, TrackQuery, ordered_ids};
+use crate::providers::{Candidate, RateLimit, Registry, TrackQuery, ordered_ids};
 use crate::render::{FrameInfo, Follow};
 use crate::render::cell::CellRenderer;
 use crate::render::pixel::{Fonts, PixelRenderer};
@@ -138,6 +138,7 @@ pub enum AppMsg {
     Artwork { url: String, result: Result<Artwork, String> },
     Search { generation: u64, provider: String, result: Result<Vec<Candidate>, String> },
     Fetched { generation: u64, candidate: Candidate, result: Result<Lyrics, String> },
+    RateLimited(RateLimit),
     CacheCleared(Result<(), String>),
     Fonts(Box<Fonts>),
     UpdateChecked { manual: bool, result: Result<Option<Release>, String> },
@@ -259,9 +260,6 @@ impl App {
             next_update_check: None,
             restart_into: None,
         };
-        if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
-            app.notify("Spicy Lyrics needs an API key: press Esc → Providers");
-        }
         app.ensure_fonts();
         app
     }
@@ -293,6 +291,13 @@ impl App {
     pub fn notify(&mut self, msg: impl Into<String>) {
         self.toast = Some((msg.into(), Instant::now()));
         self.dirty = true;
+    }
+
+    fn notify_rate_limits(&mut self, limits: &[RateLimit]) {
+        let built_in = self.cfg.providers.spicy_lyrics.own_key().is_none();
+        if let Some(msg) = crate::providers::rate_limit_notice(limits, built_in) {
+            self.notify(msg);
+        }
     }
 
     pub fn wall(&self) -> f64 {
@@ -565,7 +570,9 @@ impl App {
                     Some(res) => self.install(res),
                     None => self.lyrics = LyricsState::NotFound(outcome.attempts),
                 }
+                self.notify_rate_limits(&outcome.rate_limits);
             }
+            AppMsg::RateLimited(limit) => self.notify_rate_limits(&[limit]),
             AppMsg::Artwork { url, result } => {
                 if self.art_loading.as_deref() == Some(url.as_str()) {
                     self.art_loading = None;
@@ -807,9 +814,12 @@ impl App {
                             let cache = self.cache.clone();
                             let tx = self.msg_tx.clone();
                             tokio::spawn(async move {
-                                let result = resolve::fetch_candidate(&registry, &cache, &c, false)
-                                    .await
-                                    .map_err(|e| e.to_string());
+                                let result = resolve::fetch_candidate(&registry, &cache, &c, false).await.map_err(|e| {
+                                    if let Some(limit) = e.rate_limit(crate::providers::provider_name(&c.provider)) {
+                                        let _ = tx.send(AppMsg::RateLimited(limit));
+                                    }
+                                    e.to_string()
+                                });
                                 let _ = tx.send(AppMsg::Fetched {
                                     generation,
                                     candidate: c,
@@ -1096,7 +1106,7 @@ impl App {
             if matches!(self.lyrics, LyricsState::NotFound(_) | LyricsState::Ready { .. }) && self.track.is_some() {
                 let manual = matches!(&self.lyrics, LyricsState::Ready { resolution, .. } if resolution.manual);
                 let order_changed = ordered_ids(&self.cfg) != ordered_ids(old) || self.cfg.providers.disabled != old.providers.disabled;
-                let key_changed = self.cfg.providers.spicy_lyrics.api_key != old.providers.spicy_lyrics.api_key;
+                let key_changed = self.cfg.providers.spicy_lyrics.effective_key() != old.providers.spicy_lyrics.effective_key();
                 if !manual && (order_changed || key_changed || matches!(self.lyrics, LyricsState::NotFound(_))) {
                     self.schedule_fetch(Duration::from_millis(600));
                 }
@@ -1173,7 +1183,12 @@ impl App {
             let tx = self.msg_tx.clone();
             tokio::spawn(async move {
                 let result = match p.ready() {
-                    Ok(()) => p.search(&q).await.map_err(|e| e.to_string()),
+                    Ok(()) => p.search(&q).await.map_err(|e| {
+                        if let Some(limit) = e.rate_limit(p.name()) {
+                            let _ = tx.send(AppMsg::RateLimited(limit));
+                        }
+                        e.to_string()
+                    }),
                     Err(e) => Err(e),
                 };
                 let _ = tx.send(AppMsg::Search {

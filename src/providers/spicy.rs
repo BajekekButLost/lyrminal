@@ -1,7 +1,8 @@
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, join_all};
 use serde::Deserialize;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{Candidate, LyricsProvider, ProviderError, ProviderResult, RateGate, TrackQuery, gate_for, retry_after};
@@ -14,31 +15,32 @@ const BASE: &str = "https://api.spicylyrics.org";
 
 pub struct SpicyLyrics {
     client: reqwest::Client,
-    key: Option<String>,
+    key: String,
     min_tier: MatchTier,
+    check_results: Option<usize>,
+    checked: Mutex<HashMap<String, Lyrics>>,
     gate: Arc<RateGate>,
 }
 
 impl SpicyLyrics {
-    pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier) -> Self {
+    pub fn new(client: reqwest::Client, key: String, min_tier: MatchTier, check_results: Option<usize>) -> Self {
         Self {
             client,
             key,
             min_tier,
+            check_results,
+            checked: Mutex::new(HashMap::new()),
             gate: gate_for(ID, Duration::from_millis(250)),
         }
     }
 
-    fn key(&self) -> ProviderResult<&str> {
-        self.key
-            .as_deref()
-            .ok_or_else(|| ProviderError::NotConfigured("Spicy Lyrics API key is not set".into()))
+    fn checked(&self) -> std::sync::MutexGuard<'_, HashMap<String, Lyrics>> {
+        self.checked.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     async fn get_json(&self, url: &str, query: &[(&str, String)]) -> ProviderResult<serde_json::Value> {
-        let key = self.key()?;
         self.gate.acquire().await?;
-        let result = self.send(key, url, query).await;
+        let result = self.send(&self.key, url, query).await;
         self.gate.observe(result).await
     }
 
@@ -94,6 +96,31 @@ impl SpicyLyrics {
         serde_json::from_value(results).map_err(|e| ProviderError::Parse(e.to_string()))
     }
 
+    async fn keep_available(&self, candidates: Vec<Candidate>) -> ProviderResult<Vec<Candidate>> {
+        let probes = join_all(candidates.iter().map(|c| self.lyrics_by_id(&c.id))).await;
+        let mut kept = Vec::new();
+        let mut found = HashMap::new();
+        let mut failure = None;
+        for (mut c, probe) in candidates.into_iter().zip(probes) {
+            match probe {
+                Ok(lyrics) => {
+                    c.kind_hint = Some(lyrics.kind);
+                    found.insert(c.id.clone(), lyrics);
+                    kept.push(c);
+                }
+                Err(ProviderError::NotFound) => {}
+                Err(e) => {
+                    failure.get_or_insert(e);
+                }
+            }
+        }
+        *self.checked() = found;
+        match failure {
+            Some(e) if kept.is_empty() => Err(e),
+            _ => Ok(kept),
+        }
+    }
+
     fn candidate(&self, r: &SearchResult, id: &str, album: Option<String>, duration: f64, note: Option<String>) -> Candidate {
         Candidate {
             provider: ID.into(),
@@ -136,16 +163,11 @@ impl LyricsProvider for SpicyLyrics {
     }
 
     fn ready(&self) -> Result<(), String> {
-        if self.key.is_some() {
-            Ok(())
-        } else {
-            Err("API key not set".into())
-        }
+        Ok(())
     }
 
     fn lookup<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Option<(Candidate, Lyrics)>>> {
         Box::pin(async move {
-            self.key()?;
             let direct = q.spotify_id.clone().or_else(|| q.isrc.clone());
             if let Some(id) = direct {
                 return match self.lyrics_by_id(&id).await {
@@ -190,7 +212,6 @@ impl LyricsProvider for SpicyLyrics {
 
     fn search<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Vec<Candidate>>> {
         Box::pin(async move {
-            self.key()?;
             let mut out = Vec::new();
             if let Some(id) = &q.spotify_id {
                 out.push(Candidate {
@@ -223,12 +244,26 @@ impl LyricsProvider for SpicyLyrics {
                     }
                 }
             }
-            Ok(out)
+            let Some(limit) = self.check_results else {
+                return Ok(out);
+            };
+            out.truncate(limit.max(1));
+            self.keep_available(out).await
         })
     }
 
+    fn forget_retained(&self) {
+        self.checked().clear();
+    }
+
     fn fetch<'a>(&'a self, c: &'a Candidate) -> BoxFuture<'a, ProviderResult<Lyrics>> {
-        Box::pin(async move { self.lyrics_by_id(&c.id).await })
+        Box::pin(async move {
+            let checked = self.checked().remove(&c.id);
+            match checked {
+                Some(lyrics) => Ok(lyrics),
+                None => self.lyrics_by_id(&c.id).await,
+            }
+        })
     }
 }
 
@@ -506,6 +541,27 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fetch_reuses_checked_lyrics_once() {
+        let p = SpicyLyrics::new(reqwest::Client::new(), String::new(), MatchTier::Exact, Some(5));
+        let body: Body = serde_json::from_value(serde_json::json!({"Type": "Static", "Lines": [{"Text": "a"}], "source": "spotify"})).unwrap();
+        p.checked().insert("x".into(), convert(body).unwrap());
+        let c = Candidate {
+            provider: ID.into(),
+            id: "x".into(),
+            title: "t".into(),
+            artists: vec![],
+            album: None,
+            duration: None,
+            tier: None,
+            kind_hint: None,
+            note: None,
+        };
+        let l = p.fetch(&c).await.unwrap();
+        assert_eq!(l.lines[0].lead.text(), "a");
+        assert!(p.checked().is_empty());
+    }
 
     #[test]
     fn converts_syllable_body() {
