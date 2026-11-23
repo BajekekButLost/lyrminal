@@ -118,10 +118,11 @@ impl InterludeSpace {
                     start: now,
                 };
             }
-            if !open {
+            let counted = open && i >= target;
+            if !counted {
                 hidden += space;
             }
-            spacing.spaces.push((i, space, open));
+            spacing.spaces.push((i, space, counted));
         }
         spacing.hidden.push(hidden);
         self.glides.retain(|i, _| *i < n);
@@ -212,6 +213,28 @@ mod tests {
         assert_eq!(s.shift(2), 0.0);
         assert_eq!(s.shift(4), 0.0);
         assert!(!space.is_animating());
+    }
+
+    #[test]
+    fn scroll_stays_put_when_leading_past_an_open_interlude() {
+        let p = prepared();
+        let tops = [0.0, 2.0, 4.0, 6.0];
+        let mut space = InterludeSpace::default();
+        let mut s = space.settle(&p, &tops, 8.0, 5.0, 1, 0.0, false);
+        space.show(&mut s, 0.0);
+        let interlude_top = s.tops[1];
+
+        let mut s = space.settle(&p, &tops, 8.0, 9.8, 2, 1.0, false);
+        space.show(&mut s, 1.0);
+        assert_eq!(s.tops[2], interlude_top);
+        assert_eq!(s.shift(2), 0.0);
+        assert!(!s.is_open(1));
+
+        let mut s = space.settle(&p, &tops, 8.0, 10.0, 2, 1.2, false);
+        space.show(&mut s, 1.2);
+        assert_eq!(s.tops[2], interlude_top);
+        space.show(&mut s, 2.0);
+        assert_eq!(s.shift(2), 2.0);
     }
 
     #[test]
