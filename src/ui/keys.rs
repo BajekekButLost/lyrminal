@@ -40,6 +40,8 @@ pub struct BindingGroup {
     pub bindings: &'static [Binding],
 }
 
+pub const RENDERER_KEY: &str = "m";
+
 pub const HELP: &[BindingGroup] = &[
     BindingGroup {
         title: "General",
@@ -60,7 +62,7 @@ pub const HELP: &[BindingGroup] = &[
         title: "View",
         bindings: &[
             Binding { keys: "v", desc: "Switch style (Spring / Bloom)" },
-            Binding { keys: "m", desc: "Switch renderer (cell / pixel)" },
+            Binding { keys: RENDERER_KEY, desc: "Switch renderer (cell / pixel)" },
             Binding { keys: "t", desc: "Toggle translation" },
             Binding { keys: "r", desc: "Toggle romanization" },
             Binding { keys: "b", desc: "Toggle background vocals" },

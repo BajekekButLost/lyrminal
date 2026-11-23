@@ -11,6 +11,7 @@ pub struct TermCaps {
     pub cell_px: Option<(f32, f32)>,
     pub background: Option<Rgb>,
     pub remote: bool,
+    pub multiplexed: bool,
 }
 
 impl TermCaps {
@@ -82,6 +83,7 @@ pub fn probe() -> TermCaps {
     let multiplexed = std::env::var_os("TMUX").is_some() || std::env::var("TERM").is_ok_and(|t| t.starts_with("screen"));
     let mut caps = TermCaps {
         remote,
+        multiplexed,
         cell_px: cell_size(),
         ..Default::default()
     };

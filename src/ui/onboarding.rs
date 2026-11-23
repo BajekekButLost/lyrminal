@@ -21,6 +21,7 @@ const WIDE_FROM: u16 = 100;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Step {
+    Terminal,
     Player,
     Providers,
     Library,
@@ -29,11 +30,21 @@ pub enum Step {
     Done,
 }
 
-impl Step {
-    pub const ALL: [Step; 6] = [Step::Player, Step::Providers, Step::Library, Step::Song, Step::Customize, Step::Done];
+const PIXEL_STEPS: [Step; 6] = [Step::Player, Step::Providers, Step::Library, Step::Song, Step::Customize, Step::Done];
+const CELL_STEPS: [Step; 7] = [
+    Step::Terminal,
+    Step::Player,
+    Step::Providers,
+    Step::Library,
+    Step::Song,
+    Step::Customize,
+    Step::Done,
+];
 
+impl Step {
     pub fn title(self) -> &'static str {
         match self {
+            Step::Terminal => "Your terminal",
             Step::Player => "Your music player",
             Step::Providers => "Lyrics providers",
             Step::Library => "Your own syncs",
@@ -41,18 +52,6 @@ impl Step {
             Step::Customize => "Make it yours",
             Step::Done => "All set",
         }
-    }
-
-    pub fn index(self) -> usize {
-        Self::ALL.iter().position(|s| *s == self).unwrap_or(0)
-    }
-
-    pub fn next(self) -> Option<Step> {
-        Self::ALL.get(self.index() + 1).copied()
-    }
-
-    pub fn prev(self) -> Option<Step> {
-        self.index().checked_sub(1).map(|i| Self::ALL[i])
     }
 }
 
@@ -95,22 +94,51 @@ pub struct Onboarding {
     pub found_at: Option<Instant>,
     pub auto_advance: bool,
     pub stores_syncs: Option<bool>,
+    pub pixel: bool,
+    steps: &'static [Step],
 }
 
 impl Onboarding {
-    pub fn new() -> Self {
+    pub fn new(pixel: bool) -> Self {
+        let steps: &'static [Step] = if pixel { &PIXEL_STEPS } else { &CELL_STEPS };
         Self {
-            step: Step::Player,
+            step: steps[0],
             selected: 0,
             editing: None,
             found_at: None,
             auto_advance: false,
             stores_syncs: None,
+            pixel,
+            steps,
         }
     }
 
+    pub fn first(&self) -> Step {
+        self.steps[0]
+    }
+
+    pub fn steps(&self) -> &'static [Step] {
+        self.steps
+    }
+
+    fn index_of(&self, step: Step) -> usize {
+        self.steps.iter().position(|s| *s == step).unwrap_or(0)
+    }
+
+    pub fn index(&self) -> usize {
+        self.index_of(self.step)
+    }
+
+    pub fn next(&self) -> Option<Step> {
+        self.steps.get(self.index() + 1).copied()
+    }
+
+    pub fn prev(&self) -> Option<Step> {
+        self.index().checked_sub(1).map(|i| self.steps[i])
+    }
+
     pub fn go(&mut self, step: Step) {
-        self.auto_advance = step == Step::Song && step.index() > self.step.index();
+        self.auto_advance = step == Step::Song && self.index_of(step) > self.index();
         self.step = step;
         self.selected = 0;
         self.editing = None;
@@ -126,14 +154,19 @@ impl Onboarding {
 
     pub fn rows(&self, app: &App) -> Vec<Row> {
         let cfg = &app.cfg;
-        let setting = |section: &str, label: &str| settings::find_item(cfg, section, label).map(Row::Setting);
+        let setting = |section: &str, label: &str| settings::find_item(cfg, self.pixel, section, label).map(Row::Setting);
         let mut rows = Vec::new();
         match self.step {
+            Step::Terminal => rows.extend([Row::Next, Row::Skip]),
             Step::Player => {
                 rows.push(Row::Auto);
                 rows.extend((0..app.players.len()).map(Row::Player));
                 rows.extend(setting("Controls", "Playback controls"));
-                rows.extend([Row::Next, Row::Skip]);
+                rows.push(Row::Next);
+                if self.prev().is_some() {
+                    rows.push(Row::Back);
+                }
+                rows.push(Row::Skip);
             }
             Step::Providers => {
                 rows.extend(ordered_ids(cfg).into_iter().map(Row::Provider));
@@ -158,15 +191,26 @@ impl Onboarding {
                 rows.extend([Row::Next, Row::Back, Row::Skip]);
             }
             Step::Song => rows.extend([Row::Next, Row::Back, Row::Skip]),
-            Step::Customize => {
-                rows.extend(setting("Appearance", "Preset"));
-                if let Some(Row::Setting(mut r)) = setting("Appearance", "Renderer") {
-                    if !app.pixel_supported() {
-                        r.desc = "This terminal has no kitty graphics support, so only the cell renderer works here. kitty, Ghostty and WezTerm can draw the pixel renderer with real fonts and blur.".into();
-                    }
-                    rows.push(Row::Setting(r));
+            Step::Customize if !self.pixel => {
+                for label in [
+                    "Preset",
+                    "Style",
+                    "Background",
+                    "Album art theming",
+                    "Alignment",
+                    "Line gap",
+                    "Depth dimming",
+                    "Glow",
+                    "Fade sung lines",
+                ] {
+                    rows.extend(setting("Appearance", label));
                 }
-                for label in ["Style", "Background", "Album art theming", "Alignment", "Fade sung lines"] {
+                rows.extend(setting("Scrolling", "Animation"));
+                rows.extend(lyric_extras(app, &setting));
+                rows.extend([Row::Next, Row::Back]);
+            }
+            Step::Customize => {
+                for label in ["Preset", "Renderer", "Style", "Background", "Album art theming", "Alignment", "Fade sung lines"] {
                     rows.extend(setting("Appearance", label));
                 }
                 if app.use_pixel() {
@@ -178,20 +222,26 @@ impl Onboarding {
                     rows.extend(setting("Appearance", "Line gap"));
                 }
                 rows.extend(setting("Scrolling", "Animation"));
-                if let LyricsState::Ready { prepared, .. } = &app.lyrics {
-                    if prepared.lyrics.has_translation() {
-                        rows.extend(setting("Lyrics", "Translation"));
-                    }
-                    if prepared.lyrics.has_romanization() {
-                        rows.extend(setting("Lyrics", "Romanization"));
-                    }
-                }
+                rows.extend(lyric_extras(app, &setting));
                 rows.extend([Row::Next, Row::Back]);
             }
             Step::Done => rows.extend([Row::Next, Row::Back]),
         }
         rows
     }
+}
+
+fn lyric_extras(app: &App, setting: &dyn Fn(&str, &str) -> Option<Row>) -> Vec<Row> {
+    let mut rows = Vec::new();
+    if let LyricsState::Ready { prepared, .. } = &app.lyrics {
+        if prepared.lyrics.has_translation() {
+            rows.extend(setting("Lyrics", "Translation"));
+        }
+        if prepared.lyrics.has_romanization() {
+            rows.extend(setting("Lyrics", "Romanization"));
+        }
+    }
+    rows
 }
 
 pub struct Split {
@@ -253,6 +303,7 @@ fn row_label(row: &Row, step: Step, app: &App) -> String {
         Row::Answer(true) => "Yes, I keep sync files".into(),
         Row::Answer(false) => "No, I don't".into(),
         Row::Next => match step {
+            Step::Terminal => "Continue with the text look".into(),
             Step::Song if !lyrics_ready(app) => "Skip this step".into(),
             Step::Customize => "Finish".into(),
             Step::Done => "Start listening".into(),
@@ -323,6 +374,7 @@ fn row_desc(row: &Row, step: Step, app: &App) -> String {
         Row::Answer(true) => "Pick the folder where your sync files live, so importing one with L starts right there.".into(),
         Row::Answer(false) => "Go on. You can still add lyrics any time with L, and set a folder later in Settings → Providers → Local library.".into(),
         Row::Next => match step {
+            Step::Terminal => "Go on and pick your music player.".into(),
             Step::Player if app.snapshot.is_none() => "No player is followed yet. You can go on and choose one later with p.".into(),
             Step::Player => "Go on to the lyrics providers.".into(),
             Step::Providers if ordered_ids(cfg).iter().all(|id| !cfg.providers.is_enabled(id)) => {
@@ -350,11 +402,35 @@ enum Tone {
     Note,
 }
 
+fn truecolor() -> bool {
+    std::env::var("COLORTERM").is_ok_and(|v| matches!(v.to_ascii_lowercase().as_str(), "truecolor" | "24bit"))
+}
+
 fn status(step: Step, app: &App, found_at: Option<Instant>) -> Vec<(Tone, String)> {
     let cfg = &app.cfg;
     let mut out = Vec::new();
     let spin = spinner(app);
     match step {
+        Step::Terminal => {
+            out.push((Tone::Good, "✓ The text renderer is ready".into()));
+            if app.caps.multiplexed {
+                out.push((
+                    Tone::Bad,
+                    "tmux or screen is hiding kitty graphics. Run Lyrminal straight in kitty, Ghostty or WezTerm for the pixel look.".into(),
+                ));
+            } else if app.caps.kitty_graphics {
+                out.push((
+                    Tone::Note,
+                    "This terminal has kitty graphics but does not report its cell size, so images can't be lined up with the text.".into(),
+                ));
+            }
+            if !truecolor() {
+                out.push((
+                    Tone::Note,
+                    "This terminal does not say it supports 24-bit colour. If the colours look banded or off, turn on truecolor in its settings.".into(),
+                ));
+            }
+        }
         Step::Player => match &app.snapshot {
             Some(s) => {
                 out.push((Tone::Good, format!("✓ Following {}", s.player.display_name())));
@@ -426,8 +502,16 @@ fn status(step: Step, app: &App, found_at: Option<Instant>) -> Vec<(Tone, String
         Step::Customize => {
             if !lyrics_ready(app) {
                 out.push((Tone::Bad, "Play a song with lyrics to see the changes.".into()));
-            } else if Preset::detect(cfg) != Some(Preset::SpicyLyrics) {
-                out.push((Tone::Note, "Tip: the Spicy Lyrics preset switches everything to the Spicy Lyrics look at once.".into()));
+            } else if Preset::detect(cfg, app.pixel_supported()) != Some(Preset::SpicyLyrics) {
+                out.push((
+                    Tone::Note,
+                    if app.pixel_supported() {
+                        "Tip: the Spicy Lyrics preset switches everything to the Spicy Lyrics look at once."
+                    } else {
+                        "Tip: the Spicy Lyrics preset brings the Spicy Lyrics colours, glow and gliding page to text at once."
+                    }
+                    .into(),
+                ));
             }
         }
         Step::Done => {}
@@ -437,7 +521,11 @@ fn status(step: Step, app: &App, found_at: Option<Instant>) -> Vec<(Tone, String
 
 fn intro(step: Step, app: &App, side: bool) -> String {
     let place = if side { "on the right" } else { "below" };
+    let pixel = app.pixel_supported();
     match step {
+        Step::Terminal => "This terminal can't draw images through the kitty graphics protocol, so Lyrminal draws your lyrics with text: album colours, a wipe across every word and smooth scrolling, all in the terminal's own font. Album covers, real fonts and depth blur need a terminal like kitty, Ghostty or WezTerm.".into(),
+        Step::Customize if !pixel => format!("Try the looks while the song plays; the lyrics {place} change as you go. Everything is drawn with text, so your terminal's font shapes the look. ←→ changes the selected setting."),
+        Step::Done if !pixel => "You're ready. These keys are worth knowing, and ? lists every one. Open Lyrminal in kitty, Ghostty or WezTerm any time for album covers and real fonts.".into(),
         Step::Player => "Lyrminal shows synced lyrics for whatever your music player is playing. It finds players through MPRIS, so open Spotify, spotifast, a browser or any other MPRIS player and it shows up here.".into(),
         Step::Providers => "Lyrics come from the first provider in this list that has them. lrc.red, Better Lyrics, lrcmux and LRCLIB work without any setup.".into(),
         Step::Library => "Lyrminal can also use sync files you keep yourself, such as LRC, TTML or SRT, from its local library. Do you store syncs for your songs?".into(),
@@ -454,6 +542,17 @@ const DONE_KEYS: [(&str, &str); 8] = [
     ("L", "add your own lyrics"),
     ("v", "switch the style"),
     ("m", "switch the renderer"),
+    ("p", "choose the player"),
+    ("[ ]", "nudge the timing"),
+];
+
+const CELL_DONE_KEYS: [(&str, &str); 8] = [
+    ("Esc", "every setting"),
+    ("?", "all the keys"),
+    ("s", "choose another sync"),
+    ("L", "add your own lyrics"),
+    ("v", "switch the style"),
+    ("t", "show translations"),
     ("p", "choose the player"),
     ("[ ]", "nudge the timing"),
 ];
@@ -504,13 +603,14 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     let side = split(f.area()).side;
     let (bg, style) = panel(theme);
     hits.guide = Some(area);
-    let index = guide.step.index();
+    let index = guide.index();
+    let steps = guide.steps();
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(theme.accent.to_color()).bg(bg.to_color()))
         .title(Span::styled(" Welcome to Lyrminal ", strong(theme, bg)))
-        .title_bottom(Line::from(Span::styled(format!(" {} / {} ", index + 1, Step::ALL.len()), panel_ink(theme, bg, 0.5))).right_aligned())
+        .title_bottom(Line::from(Span::styled(format!(" {} / {} ", index + 1, steps.len()), panel_ink(theme, bg, 0.5))).right_aligned())
         .style(style);
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -578,7 +678,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     };
     let width = body.width as usize;
     let mut display: Vec<(Option<usize>, Line)> = Vec::new();
-    let dots: String = Step::ALL
+    let dots: String = steps
         .iter()
         .enumerate()
         .map(|(i, _)| if i == index { "●" } else if i < index { "•" } else { "○" })
@@ -599,7 +699,7 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect, hits: &mut UiHits) {
     }
     if guide.step == Step::Done {
         display.push((None, Line::default()));
-        for (k, d) in DONE_KEYS {
+        for (k, d) in if guide.pixel { DONE_KEYS } else { CELL_DONE_KEYS } {
             display.push((
                 None,
                 Line::from(vec![
@@ -757,8 +857,21 @@ mod tests {
 
     #[test]
     fn steps_go_in_order() {
-        assert_eq!(Step::Player.prev(), None);
-        assert_eq!(Step::Player.next(), Some(Step::Providers));
-        assert_eq!(Step::Done.next(), None);
+        let mut g = Onboarding::new(true);
+        assert_eq!(g.step, Step::Player);
+        assert_eq!(g.prev(), None);
+        assert_eq!(g.next(), Some(Step::Providers));
+        g.go(Step::Done);
+        assert_eq!(g.next(), None);
+    }
+
+    #[test]
+    fn text_only_terminals_start_with_the_terminal_step() {
+        let mut g = Onboarding::new(false);
+        assert_eq!(g.first(), Step::Terminal);
+        assert_eq!(g.next(), Some(Step::Player));
+        g.go(Step::Player);
+        assert_eq!(g.prev(), Some(Step::Terminal));
+        assert_eq!(g.steps().len(), 7);
     }
 }

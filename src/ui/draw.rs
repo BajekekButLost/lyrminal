@@ -16,7 +16,7 @@ use crate::providers::{ordered_ids, provider_name};
 use crate::render::{FrameInput, LinkSpan};
 use crate::term::kitty::{self, Placement};
 use crate::theme::Theme;
-use crate::ui::keys::{Action, HELP};
+use crate::ui::keys::{Action, Binding, HELP, RENDERER_KEY};
 use crate::ui::library::{self as library_ui, LibraryDialog, Row as LibRow, SourceKind, View as LibView};
 use crate::ui::onboarding;
 use crate::ui::settings::{self, Kind};
@@ -174,7 +174,7 @@ pub fn draw(f: &mut Frame, app: &mut App, now: Instant, dt: f64) -> DrawOutput {
     }
     match &app.overlay {
         Overlay::None => {}
-        Overlay::Help => draw_help(f, &theme, &mut hits),
+        Overlay::Help => draw_help(f, &theme, app.pixel_supported(), &mut hits),
         Overlay::Settings(_) => draw_settings(f, app, &mut hits),
         Overlay::Players { .. } => draw_players(f, app, &mut hits),
         Overlay::Syncs(_) => draw_syncs(f, app, &mut hits),
@@ -563,13 +563,14 @@ fn modal(f: &mut Frame, theme: &Theme, title: &str, w: u16, h: u16, hits: &mut U
     (padded, bg)
 }
 
-fn draw_help(f: &mut Frame, theme: &Theme, hits: &mut UiHits) {
-    let rows: usize = HELP.iter().map(|g| g.bindings.len() + 2).sum::<usize>() + 2;
+fn draw_help(f: &mut Frame, theme: &Theme, pixel: bool, hits: &mut UiHits) {
+    let shown = |b: &&Binding| pixel || b.keys != RENDERER_KEY;
+    let rows: usize = HELP.iter().map(|g| g.bindings.iter().filter(shown).count() + 2).sum::<usize>() + 2;
     let (inner, bg) = modal(f, theme, "Keys", 76, rows as u16 + 2, hits);
     let mut lines = Vec::new();
     for g in HELP {
         lines.push(Line::from(Span::styled(g.title, Style::default().fg(theme.accent.to_color()).add_modifier(Modifier::BOLD))));
-        for b in g.bindings {
+        for b in g.bindings.iter().filter(shown) {
             lines.push(Line::from(vec![
                 Span::styled(format!("  {:<14}", b.keys), panel_ink(theme, bg, 0.95).add_modifier(Modifier::BOLD)),
                 Span::styled(b.desc, panel_ink(theme, bg, 0.7)),
@@ -589,7 +590,7 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
     let theme = &app.theme;
     let area = f.area();
     let (inner, bg) = modal(f, theme, "Settings", 96.min(area.width), area.height.saturating_sub(4).max(16), hits);
-    let secs = settings::sections(&app.cfg);
+    let secs = state.sections(&app.cfg);
     let section = state.section.min(secs.len() - 1);
     let items = state.items(&app.cfg);
     let selected = state.item.min(items.len().saturating_sub(1));
@@ -652,7 +653,7 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
             format!("{shown}▏")
         } else if matches!(it.kind, Kind::Action(settings::SettingsAction::Update)) {
             app.update.value()
-        } else if is_sel && matches!(it.kind, Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset) {
+        } else if is_sel && matches!(it.kind, Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset { .. }) {
             format!("‹ {} ›", settings::value_text(&app.cfg, &it.kind))
         } else {
             settings::value_text(&app.cfg, &it.kind)

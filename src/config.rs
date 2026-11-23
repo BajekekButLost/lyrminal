@@ -485,8 +485,12 @@ impl Preset {
         cfg.lyrics.join_split_words = d.lyrics.join_split_words;
     }
 
-    pub fn detect(cfg: &Config) -> Option<Preset> {
-        let current = serde_json::to_value(cfg).ok()?;
+    pub fn detect(cfg: &Config, pixel: bool) -> Option<Preset> {
+        let mut cfg = cfg.clone();
+        if !pixel {
+            cfg.appearance.renderer = Config::default().appearance.renderer;
+        }
+        let current = serde_json::to_value(&cfg).ok()?;
         Preset::ALL.into_iter().find(|p| {
             let mut c = cfg.clone();
             p.apply(&mut c);
@@ -564,7 +568,15 @@ mod tests {
 
     #[test]
     fn defaults_match_the_lyrminal_preset() {
-        assert_eq!(Preset::detect(&Config::default()), Some(Preset::Lyrminal));
+        assert_eq!(Preset::detect(&Config::default(), true), Some(Preset::Lyrminal));
+    }
+
+    #[test]
+    fn presets_ignore_the_renderer_without_pixel_support() {
+        let mut cfg = Config::default();
+        cfg.appearance.renderer = Renderer::Cell;
+        assert_eq!(Preset::detect(&cfg, true), None);
+        assert_eq!(Preset::detect(&cfg, false), Some(Preset::Lyrminal));
     }
 
     #[test]
@@ -573,7 +585,7 @@ mod tests {
         cfg.providers.spicy_lyrics.api_key = "sl_sk_kept".into();
         cfg.sync.offset_ms = 120;
         Preset::SpicyLyrics.apply(&mut cfg);
-        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
+        assert_eq!(Preset::detect(&cfg, true), Some(Preset::SpicyLyrics));
         assert_eq!(cfg.appearance.renderer, Renderer::Pixel);
         assert_eq!(cfg.appearance.syllable_spacing, SyllableSpacing::Separate);
         assert_eq!(cfg.scroll.animation, ScrollAnimation::Smooth);
@@ -583,8 +595,8 @@ mod tests {
         assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_kept");
         assert_eq!(cfg.sync.offset_ms, 120);
         cfg.appearance.style = VisualStyle::Bloom;
-        assert_eq!(Preset::detect(&cfg), None);
+        assert_eq!(Preset::detect(&cfg, true), None);
         Preset::Lyrminal.apply(&mut cfg);
-        assert_eq!(Preset::detect(&cfg), Some(Preset::Lyrminal));
+        assert_eq!(Preset::detect(&cfg, true), Some(Preset::Lyrminal));
     }
 }
