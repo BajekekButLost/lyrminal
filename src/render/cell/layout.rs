@@ -93,7 +93,7 @@ struct Token {
     width: u16,
 }
 
-fn tokens(group: &VocalGroup, roman: bool) -> Vec<Token> {
+fn tokens(group: &VocalGroup, roman: bool, glue: bool) -> Vec<Token> {
     let mut out: Vec<Token> = Vec::new();
     let mut current: Vec<Glyph> = Vec::new();
     let mut word = 0usize;
@@ -101,11 +101,15 @@ fn tokens(group: &VocalGroup, roman: bool) -> Vec<Token> {
         if current.is_empty() {
             return;
         }
-        let len = current.len();
-        for (i, g) in current.iter_mut().enumerate() {
-            g.letter = i;
+        let len = current.iter().filter(|g| !g.space).count();
+        let mut letter = 0usize;
+        for g in current.iter_mut() {
+            g.letter = letter;
             g.word_len = len;
             g.word = *word;
+            if !g.space {
+                letter += 1;
+            }
         }
         let width = current.iter().map(|g| g.width).sum();
         out.push(Token {
@@ -125,14 +129,24 @@ fn tokens(group: &VocalGroup, roman: bool) -> Vec<Token> {
         };
         let graphemes: Vec<&str> = text.graphemes(true).collect();
         let syl_len = graphemes.len().max(1);
+        let blank = |g: &&str| g.chars().all(char::is_whitespace);
+        let first = graphemes.iter().position(|g| !blank(g));
+        let last = graphemes.iter().rposition(|g| !blank(g));
         for (gi, g) in graphemes.iter().enumerate() {
-            if g.chars().all(char::is_whitespace) {
-                flush(&mut current, &mut out, &mut word);
-                continue;
+            let space = blank(g);
+            if space {
+                let inner = glue && first.is_some_and(|f| gi > f) && last.is_some_and(|l| gi < l);
+                if !inner {
+                    flush(&mut current, &mut out, &mut word);
+                    continue;
+                }
+                if current.last().is_some_and(|p| p.space) {
+                    continue;
+                }
             }
             current.push(Glyph {
-                text: g.to_string(),
-                width: UnicodeWidthStr::width(*g).max(1) as u16,
+                text: if space { " ".into() } else { g.to_string() },
+                width: if space { 1 } else { UnicodeWidthStr::width(*g).max(1) as u16 },
                 col: 0,
                 syl: si,
                 index_in_syl: gi,
@@ -140,7 +154,7 @@ fn tokens(group: &VocalGroup, roman: bool) -> Vec<Token> {
                 word: 0,
                 letter: 0,
                 word_len: 0,
-                space: false,
+                space,
             });
         }
         if !part_of_word {
@@ -182,6 +196,9 @@ fn wrap(tokens: Vec<Token>, width: u16) -> Vec<Vec<Glyph>> {
                 rows.push(std::mem::take(&mut row));
                 col = 0;
             }
+            if g.space && row.is_empty() {
+                continue;
+            }
             g.col = col;
             col += g.width;
             row.push(g);
@@ -195,7 +212,7 @@ fn wrap(tokens: Vec<Token>, width: u16) -> Vec<Vec<Glyph>> {
 
 fn plain_tokens(text: &str) -> Vec<Token> {
     let group = VocalGroup::single(text.to_string(), 0.0, 0.0);
-    tokens(&group, false)
+    tokens(&group, false, false)
 }
 
 fn rows_from(glyph_rows: Vec<Vec<Glyph>>, kind: RowKind, align: Align, link: Option<String>) -> Vec<Row> {
@@ -355,7 +372,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
             ItemKind::Line(li) => {
                 let line = &prepared.lyrics.lines[li];
                 rows.extend(rows_from(
-                    wrap(tokens(&line.lead, false), lyric_width),
+                    wrap(tokens(&line.lead, false, line.lead.keeps_syllables_whole(kind)), lyric_width),
                     RowKind::Lyric(Group::Lead),
                     align,
                     None,
@@ -364,7 +381,7 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
                     let per_syllable = line.lead.syllables.iter().any(|s| s.roman.is_some());
                     if per_syllable && kind == SyncKind::Syllable {
                         rows.extend(rows_from(
-                            wrap(tokens(&line.lead, true), lyric_width),
+                            wrap(tokens(&line.lead, true, line.lead.keeps_syllables_whole(kind)), lyric_width),
                             RowKind::Roman {
                                 group: Group::Lead,
                                 timed: true,
@@ -388,14 +405,14 @@ pub fn build(prepared: &Prepared, opts: LayoutOptions) -> Layout {
                 if opts.background {
                     for (bi, bg) in line.background.iter().enumerate() {
                         rows.extend(rows_from(
-                            wrap(tokens(bg, false), lyric_width),
+                            wrap(tokens(bg, false, bg.keeps_syllables_whole(kind)), lyric_width),
                             RowKind::Lyric(Group::Bg(bi)),
                             align,
                             None,
                         ));
                         if opts.romanization && bg.syllables.iter().any(|s| s.roman.is_some()) {
                             rows.extend(rows_from(
-                                wrap(tokens(bg, true), lyric_width),
+                                wrap(tokens(bg, true, bg.keeps_syllables_whole(kind)), lyric_width),
                                 RowKind::Roman {
                                     group: Group::Bg(bi),
                                     timed: true,
@@ -491,7 +508,7 @@ mod tests {
             roman: None,
             translation: None,
         };
-        let rows = wrap(tokens(&group, false), 10);
+        let rows = wrap(tokens(&group, false, true), 10);
         let texts: Vec<String> = rows
             .iter()
             .map(|r| r.iter().map(|g| g.text.as_str()).collect::<String>())
@@ -501,6 +518,28 @@ mod tests {
         assert_eq!(rows[0][3].index_in_syl, 0);
         assert_eq!(rows[0][3].letter, 3);
         assert_eq!(rows[0][3].word_len, 6);
+    }
+
+    #[test]
+    fn keeps_multi_word_syllables_on_one_row() {
+        let group = VocalGroup {
+            syllables: vec![syl("hold", false), syl(" on  to ", false), syl("me", false)],
+            ..Default::default()
+        };
+        let texts = |glue: bool| -> Vec<String> {
+            wrap(tokens(&group, false, glue), 9)
+                .iter()
+                .map(|r| r.iter().map(|g| g.text.as_str()).collect())
+                .collect()
+        };
+        assert_eq!(texts(false), vec!["hold on", "to me"]);
+        assert_eq!(texts(true), vec!["hold", "on to me"]);
+        let toks = tokens(&group, false, true);
+        assert_eq!(toks.len(), 3);
+        let inner = &toks[1].glyphs;
+        assert!(inner[2].space);
+        assert_eq!((inner[3].letter, inner[3].word_len, inner[3].word), (2, 4, 1));
+        assert_eq!(toks[2].glyphs[0].word, 2);
     }
 
     #[test]

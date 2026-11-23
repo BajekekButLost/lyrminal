@@ -220,7 +220,23 @@ pub struct PixelRenderer {
     frame: u64,
 }
 
-fn group_text(group: &VocalGroup, roman: bool) -> (String, Vec<Range<usize>>) {
+fn push_glued(text: &mut String, syllable: &str) {
+    let core = syllable.trim();
+    let lead = &syllable[..syllable.len() - syllable.trim_start().len()];
+    let tail = &syllable[lead.len() + core.len()..];
+    text.push_str(lead);
+    let mut words = core.split_whitespace();
+    if let Some(first) = words.next() {
+        text.push_str(first);
+    }
+    for w in words {
+        text.push('\u{a0}');
+        text.push_str(w);
+    }
+    text.push_str(tail);
+}
+
+fn group_text(group: &VocalGroup, roman: bool, glue: bool) -> (String, Vec<Range<usize>>) {
     let mut text = String::new();
     let mut ranges = Vec::new();
     let n = group.syllables.len();
@@ -234,7 +250,11 @@ fn group_text(group: &VocalGroup, roman: bool) -> (String, Vec<Range<usize>>) {
             (s.text.as_str(), s.part_of_word)
         };
         let start = text.len();
-        text.push_str(t);
+        if glue {
+            push_glued(&mut text, t);
+        } else {
+            text.push_str(t);
+        }
         ranges.push(start..text.len());
         if !part && i + 1 < n {
             text.push(' ');
@@ -358,6 +378,7 @@ impl PixelRenderer {
         &mut self,
         kind: PartKind,
         group: &VocalGroup,
+        sync: SyncKind,
         roman: bool,
         size: f32,
         width: f32,
@@ -366,7 +387,7 @@ impl PixelRenderer {
         family: &str,
         weight: u16,
     ) -> Part {
-        let (text, ranges) = group_text(group, roman);
+        let (text, ranges) = group_text(group, roman, group.keeps_syllables_whole(sync));
         let words = process::words(group);
         let mut words_of_syl = vec![0usize; group.syllables.len()];
         for (wi, w) in words.iter().enumerate() {
@@ -467,7 +488,7 @@ impl PixelRenderer {
                         parts.push(p);
                     };
                     let lead_size = if line.background_only { size * 0.72 } else { size };
-                    let mut lead = self.build_part(PartKind::Lead, &line.lead, false, lead_size, width, x, align, &family, weight);
+                    let mut lead = self.build_part(PartKind::Lead, &line.lead, prepared.lyrics.kind, false, lead_size, width, x, align, &family, weight);
                     lead.background = line.background_only;
                     push(lead, &mut parts, size * 0.08);
                     if key.romanization && (line.lead.syllables.iter().any(|s| s.roman.is_some()) || line.lead.roman.is_some()) {
@@ -477,12 +498,12 @@ impl PixelRenderer {
                         } else {
                             VocalGroup::single(line.lead.roman_text().unwrap_or_default(), line.start, line.end)
                         };
-                        let p = self.build_part(PartKind::Roman { bg: None, timed }, &group, timed, size * 0.62, width, x, align, &family, weight);
+                        let p = self.build_part(PartKind::Roman { bg: None, timed }, &group, prepared.lyrics.kind, timed, size * 0.62, width, x, align, &family, weight);
                         push(p, &mut parts, size * 0.08);
                     }
                     if key.background {
                         for (bi, bg) in line.background.iter().enumerate() {
-                            let p = self.build_part(PartKind::Bg(bi), bg, false, size * 0.72, width, x, align, &family, weight);
+                            let p = self.build_part(PartKind::Bg(bi), bg, prepared.lyrics.kind, false, size * 0.72, width, x, align, &family, weight);
                             push(p, &mut parts, size * 0.06);
                         }
                     }
@@ -490,7 +511,7 @@ impl PixelRenderer {
                         && let Some(tr) = &line.lead.translation
                     {
                         let g = VocalGroup::single(tr.clone(), line.start, line.end);
-                        let p = self.build_part(PartKind::Translation, &g, false, size * 0.58, width, x, align, &family, 400);
+                        let p = self.build_part(PartKind::Translation, &g, prepared.lyrics.kind, false, size * 0.58, width, x, align, &family, 400);
                         push(p, &mut parts, 0.0);
                     }
                     height = y;
@@ -1332,10 +1353,37 @@ mod tests {
     }
 
     #[test]
+    fn multi_word_syllables_wrap_as_one() {
+        let mut renderer = PixelRenderer::new(load_fonts());
+        let group = VocalGroup {
+            syllables: ["aaaa", "bbbb cccc", "dddd"]
+                .iter()
+                .map(|t| Syllable {
+                    text: t.to_string(),
+                    start: 0.0,
+                    end: 1.0,
+                    part_of_word: false,
+                    roman: None,
+                    roman_part_of_word: false,
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let rows = |renderer: &mut PixelRenderer, sync: SyncKind| {
+            let part = renderer.build_part(PartKind::Lead, &group, sync, false, 44.0, 300.0, 0.0, Align::Left, "", 700);
+            let mut rows: Vec<f32> = part.glyphs.iter().filter(|g| !g.blank && g.syl == 1).map(|g| g.baseline).collect();
+            rows.dedup();
+            rows.len()
+        };
+        assert_eq!(rows(&mut renderer, SyncKind::Line), 2);
+        assert_eq!(rows(&mut renderer, SyncKind::Syllable), 1);
+    }
+
+    #[test]
     fn syllables_stay_joined_while_scaled() {
         let mut renderer = PixelRenderer::new(load_fonts());
         let group = words("brigh|ter to|night", 0.0, 0.3);
-        let part = renderer.build_part(PartKind::Lead, &group, false, 44.0, 800.0, 0.0, Align::Left, "", 700);
+        let part = renderer.build_part(PartKind::Lead, &group, SyncKind::Syllable, false, 44.0, 800.0, 0.0, Align::Left, "", 700);
         let uniform = part.syllable_chain(SyllableSpacing::Joined, |_| 0.95);
         for (si, &(a, s)) in uniform.iter().enumerate() {
             let (x0, x1) = part.syl_boxes[si];
