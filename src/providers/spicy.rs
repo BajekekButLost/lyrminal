@@ -252,6 +252,10 @@ impl LyricsProvider for SpicyLyrics {
         })
     }
 
+    fn forget_retained(&self) {
+        self.checked().clear();
+    }
+
     fn fetch<'a>(&'a self, c: &'a Candidate) -> BoxFuture<'a, ProviderResult<Lyrics>> {
         Box::pin(async move {
             let checked = self.checked().remove(&c.id);

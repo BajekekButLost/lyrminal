@@ -39,6 +39,9 @@ pub async fn fetch_candidate(registry: &Registry, cache: &Cache, c: &Candidate, 
     let provider = registry
         .get(&c.provider)
         .ok_or_else(|| ProviderError::NotConfigured(format!("{} is disabled", super::provider_name(&c.provider))))?;
+    if bypass_cache {
+        provider.forget_retained();
+    }
     let lyrics = provider.fetch(c).await?;
     if cacheable {
         cache.put_lyrics(&c.provider, &c.id, &lyrics);
@@ -185,6 +188,7 @@ mod tests {
         tier: MatchTier,
         delay: Duration,
         limited: bool,
+        retained: Mutex<Option<Lyrics>>,
     }
 
     impl LyricsProvider for Mock {
@@ -235,7 +239,12 @@ mod tests {
         }
 
         fn fetch<'a>(&'a self, _c: &'a Candidate) -> BoxFuture<'a, ProviderResult<Lyrics>> {
-            Box::pin(async { Err(ProviderError::NotFound) })
+            let retained = self.retained.lock().unwrap().take();
+            Box::pin(async move { retained.ok_or(ProviderError::NotFound) })
+        }
+
+        fn forget_retained(&self) {
+            *self.retained.lock().unwrap() = None;
         }
     }
 
@@ -258,6 +267,7 @@ mod tests {
             tier,
             delay,
             limited: false,
+            retained: Mutex::new(None),
         })
     }
 
@@ -268,6 +278,7 @@ mod tests {
             tier: MatchTier::Exact,
             delay: Duration::ZERO,
             limited: true,
+            retained: Mutex::new(None),
         })
     }
 
@@ -288,6 +299,39 @@ mod tests {
             ..Default::default()
         };
         resolve(&registry, &cache, &q, None, true).await
+    }
+
+    #[tokio::test]
+    async fn forced_refresh_skips_retained_lyrics() {
+        let cache = Cache::new(std::env::temp_dir().join("lyrminal-resolve-test"), 1, false);
+        for bypass in [false, true] {
+            let m = mock("a", None);
+            *m.retained.lock().unwrap() = Some(Lyrics {
+                kind: SyncKind::Line,
+                lines: vec![],
+                credits: Credits::default(),
+                language: None,
+                instrumental: false,
+            });
+            let registry = Registry {
+                providers: vec![m.clone() as Arc<dyn LyricsProvider>],
+                prefer_synced: true,
+                prioritize_local: true,
+            };
+            let c = Candidate {
+                provider: "a".into(),
+                id: "a".into(),
+                title: "Song".into(),
+                artists: vec![],
+                album: None,
+                duration: None,
+                tier: None,
+                kind_hint: None,
+                note: None,
+            };
+            let got = fetch_candidate(&registry, &cache, &c, bypass).await;
+            assert_eq!(got.is_ok(), !bypass);
+        }
     }
 
     #[tokio::test]

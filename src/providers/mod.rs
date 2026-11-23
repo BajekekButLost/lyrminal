@@ -273,6 +273,7 @@ pub trait LyricsProvider: Send + Sync {
     fn lookup<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Option<(Candidate, Lyrics)>>>;
     fn search<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Vec<Candidate>>>;
     fn fetch<'a>(&'a self, c: &'a Candidate) -> BoxFuture<'a, ProviderResult<Lyrics>>;
+    fn forget_retained(&self) {}
 }
 
 pub struct ProviderInfo {
