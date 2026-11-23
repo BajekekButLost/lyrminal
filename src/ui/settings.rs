@@ -1452,7 +1452,7 @@ mod tests {
         let out = handle_key(&mut st, &mut cfg, key(KeyCode::Left, KeyModifiers::NONE));
         assert!(matches!(out, SettingsOutcome::Changed));
         assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
-        cfg.appearance.glow = true;
+        cfg.appearance.glow = false;
         assert_eq!(value_text(&cfg, &st.items(&cfg)[0].kind), "custom");
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));

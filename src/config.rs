@@ -449,42 +449,40 @@ impl Preset {
     }
 
     pub fn apply(self, cfg: &mut Config) {
-        let d = Config::default();
+        let mut d = Config::default();
+        if self == Preset::SpicyLyrics {
+            d.appearance.font_scale = 2.2;
+            d.appearance.glow = true;
+            d.appearance.syllable_spacing = SyllableSpacing::Separate;
+            d.scroll.animation = ScrollAnimation::Smooth;
+            d.scroll.lead_ms = 0;
+        }
         let a = &mut cfg.appearance;
-        a.style = VisualStyle::Spring;
-        a.album_theming = true;
-        a.background = Background::Gradient;
-        a.album_art = true;
-        a.show_header = true;
-        a.alignment = Alignment::Left;
-        a.line_gap = d.appearance.line_gap;
-        a.depth_dimming = true;
-        a.fade_previous = false;
-        a.contrast = d.appearance.contrast;
-        a.font_weight = 700;
-        a.font_scale = d.appearance.font_scale;
-        a.glow = false;
-        a.emphasis = true;
+        let da = d.appearance;
+        a.renderer = da.renderer;
+        a.style = da.style;
+        a.album_theming = da.album_theming;
+        a.background = da.background;
+        a.album_art = da.album_art;
+        a.show_header = da.show_header;
+        a.alignment = da.alignment;
+        a.line_gap = da.line_gap;
+        a.depth_dimming = da.depth_dimming;
+        a.fade_previous = da.fade_previous;
+        a.contrast = da.contrast;
+        a.font_weight = da.font_weight;
+        a.font_scale = da.font_scale;
+        a.glow = da.glow;
+        a.emphasis = da.emphasis;
+        a.syllable_spacing = da.syllable_spacing;
+        cfg.scroll.animation = d.scroll.animation;
         cfg.scroll.speed = d.scroll.speed;
-        cfg.lyrics.background_vocals = true;
-        cfg.lyrics.interludes = true;
+        cfg.scroll.lead_ms = d.scroll.lead_ms;
+        cfg.lyrics.background_vocals = d.lyrics.background_vocals;
+        cfg.lyrics.interludes = d.lyrics.interludes;
         cfg.lyrics.interlude_threshold_secs = d.lyrics.interlude_threshold_secs;
         cfg.lyrics.reserve_interlude_space = d.lyrics.reserve_interlude_space;
-        cfg.lyrics.join_split_words = false;
-        match self {
-            Preset::SpicyLyrics => {
-                cfg.appearance.renderer = Renderer::Pixel;
-                cfg.appearance.syllable_spacing = SyllableSpacing::Separate;
-                cfg.scroll.animation = ScrollAnimation::Smooth;
-                cfg.scroll.lead_ms = 0;
-            }
-            Preset::Lyrminal => {
-                cfg.appearance.renderer = d.appearance.renderer;
-                cfg.appearance.syllable_spacing = d.appearance.syllable_spacing;
-                cfg.scroll.animation = d.scroll.animation;
-                cfg.scroll.lead_ms = d.scroll.lead_ms;
-            }
-        }
+        cfg.lyrics.join_split_words = d.lyrics.join_split_words;
     }
 
     pub fn detect(cfg: &Config) -> Option<Preset> {
@@ -579,6 +577,9 @@ mod tests {
         assert_eq!(cfg.appearance.renderer, Renderer::Pixel);
         assert_eq!(cfg.appearance.syllable_spacing, SyllableSpacing::Separate);
         assert_eq!(cfg.scroll.animation, ScrollAnimation::Smooth);
+        assert_eq!(cfg.scroll.lead_ms, 0);
+        assert_eq!(cfg.appearance.font_scale, 2.2);
+        assert!(cfg.appearance.glow);
         assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_kept");
         assert_eq!(cfg.sync.offset_ms, 120);
         cfg.appearance.style = VisualStyle::Bloom;
