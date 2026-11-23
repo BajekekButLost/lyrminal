@@ -163,18 +163,40 @@ pub async fn load_artwork(client: &reqwest::Client, url: &str) -> Result<Artwork
     } else {
         bail!("unsupported artwork url");
     };
-    let image = tokio::task::spawn_blocking(move || -> Result<RgbaImage> {
+    let (image, palette) = tokio::task::spawn_blocking(move || -> Result<(RgbaImage, Palette)> {
         let img = image::load_from_memory(&bytes)?;
-        let img = img.resize(512, 512, FilterType::Triangle);
-        Ok(img.to_rgba8())
+        let mut img = img.resize(512, 512, FilterType::Triangle).to_rgba8();
+        let palette = extract_palette(&img);
+        let radius = img.width().min(img.height()) as f32 * COVER_RADIUS;
+        round_corners(&mut img, radius);
+        Ok((img, palette))
     })
     .await??;
-    let palette = extract_palette(&image);
     Ok(Artwork {
         url: url.to_string(),
         image: Arc::new(image),
         palette,
     })
+}
+
+const COVER_RADIUS: f32 = 0.08;
+
+pub fn round_corners(img: &mut RgbaImage, radius: f32) {
+    let (w, h) = (img.width() as f32, img.height() as f32);
+    let r = radius.min(w / 2.0).min(h / 2.0);
+    if r <= 0.0 {
+        return;
+    }
+    for (x, y, p) in img.enumerate_pixels_mut() {
+        let px = x as f32 + 0.5;
+        let py = y as f32 + 0.5;
+        let dx = px - px.clamp(r, w - r);
+        let dy = py - py.clamp(r, h - r);
+        let cover = (r - (dx * dx + dy * dy).sqrt() + 0.5).clamp(0.0, 1.0);
+        if cover < 1.0 {
+            p.0[3] = (p.0[3] as f32 * cover).round() as u8;
+        }
+    }
 }
 
 fn percent_decode(s: &str) -> String {
@@ -213,6 +235,19 @@ mod tests {
         let pal = extract_palette(&img);
         assert!(pal.accent.r > 0.6 && pal.accent.g < 0.4);
         assert!(pal.dominant.luminance() < 0.2);
+    }
+
+    #[test]
+    fn rounds_the_cover_corners() {
+        let mut img = RgbaImage::from_pixel(100, 100, image::Rgba([200, 100, 50, 255]));
+        round_corners(&mut img, 10.0);
+        assert_eq!(img.get_pixel(0, 0).0[3], 0);
+        assert_eq!(img.get_pixel(99, 99).0[3], 0);
+        assert_eq!(img.get_pixel(50, 0).0[3], 255);
+        assert_eq!(img.get_pixel(50, 50).0[3], 255);
+        assert_eq!(img.get_pixel(0, 0).0[0], 200);
+        let edge = img.get_pixel(3, 2).0[3];
+        assert!(edge > 0 && edge < 255);
     }
 
     #[test]

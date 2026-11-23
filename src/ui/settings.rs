@@ -10,6 +10,17 @@ use crate::providers::cache::MAX_TTL_DAYS;
 use crate::providers::{ordered_ids, provider_name};
 
 pub const PRESET_DESC: &str = "Changes the look in one go. Spicy Lyrics matches the Spicy Lyrics extension: real fonts with depth blur in the pixel renderer, an album-coloured gradient, syllables that grow on their own and a page that glides as one. Lyrminal is the default look.";
+pub const CELL_PRESET_DESC: &str = "Changes the look in one go. Spicy Lyrics brings the Spicy Lyrics look to text: an album-coloured gradient, glowing words and a page that glides as one. Lyrminal is the default look.";
+
+const PIXEL_ONLY: [&str; 7] = [
+    "Renderer",
+    "Cover art",
+    "Syllable spacing",
+    "Pixel frame rate",
+    "Pixel font",
+    "Pixel font weight",
+    "Pixel font size",
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SettingsAction {
@@ -50,7 +61,9 @@ pub enum Kind {
         folder: bool,
     },
     Provider(String),
-    Preset,
+    Preset {
+        pixel: bool,
+    },
     Action(SettingsAction),
     Info,
 }
@@ -156,7 +169,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             item(
                 "API key",
                 &format!(
-                    "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in ~/.config/lyrminal/config.json. The {SPICY_KEY_ENV} environment variable overrides it."
+                    "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in {}. The {SPICY_KEY_ENV} environment variable overrides it.",
+                    Config::path().display()
                 ),
                 Kind::Text {
                     get: |c| c.providers.spicy_lyrics.api_key.clone(),
@@ -313,7 +327,22 @@ pub fn provider_page(id: &str) -> Vec<Item> {
     }
 }
 
-pub fn sections(cfg: &Config) -> Vec<Section> {
+pub fn sections(cfg: &Config, pixel: bool) -> Vec<Section> {
+    let mut secs = all_sections(cfg, pixel);
+    if !pixel {
+        for s in &mut secs {
+            s.items.retain(|i| !PIXEL_ONLY.contains(&i.label.as_str()));
+            for i in &mut s.items {
+                if i.label == "Frame rate" {
+                    i.desc = "Animation frame rate.".into();
+                }
+            }
+        }
+    }
+    secs
+}
+
+fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
     let providers: Vec<Item> = ordered_ids(cfg)
         .into_iter()
         .map(|id| {
@@ -394,7 +423,7 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
         Section {
             title: "Appearance",
             items: vec![
-                item("Preset", PRESET_DESC, Kind::Preset),
+                item("Preset", if pixel { PRESET_DESC } else { CELL_PRESET_DESC }, Kind::Preset { pixel }),
                 item(
                     "Renderer",
                     "Cell draws with terminal text. Pixel draws real fonts with blur, scale and glow through the kitty graphics protocol (kitty, Ghostty, WezTerm).",
@@ -987,14 +1016,14 @@ pub fn value_text(cfg: &Config, kind: &Kind) -> String {
             };
             format!("#{pos} {}{ready}", if on { "on" } else { "off" })
         }
-        Kind::Preset => Preset::detect(cfg).map(|p| p.label()).unwrap_or("custom").into(),
+        Kind::Preset { pixel } => Preset::detect(cfg, *pixel).map(|p| p.label()).unwrap_or("custom").into(),
         Kind::Action(_) => "↵".into(),
         Kind::Info => String::new(),
     }
 }
 
-pub fn find_item(cfg: &Config, section: &str, label: &str) -> Option<Item> {
-    sections(cfg)
+pub fn find_item(cfg: &Config, pixel: bool, section: &str, label: &str) -> Option<Item> {
+    sections(cfg, pixel)
         .into_iter()
         .find(|s| s.title == section)?
         .items
@@ -1003,7 +1032,7 @@ pub fn find_item(cfg: &Config, section: &str, label: &str) -> Option<Item> {
 }
 
 pub fn adjustable(kind: &Kind) -> bool {
-    matches!(kind, Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset)
+    matches!(kind, Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Number { .. } | Kind::Preset { .. })
 }
 
 pub fn step_value(cfg: &mut Config, kind: &Kind, dir: i32, shift: bool) -> bool {
@@ -1025,9 +1054,9 @@ pub fn step_value(cfg: &mut Config, kind: &Kind, dir: i32, shift: bool) -> bool 
             set(cfg, !get(cfg));
             true
         }
-        Kind::Preset => {
+        Kind::Preset { pixel } => {
             let n = Preset::ALL.len() as i32;
-            let next = match Preset::detect(cfg).and_then(|p| Preset::ALL.iter().position(|q| *q == p)) {
+            let next = match Preset::detect(cfg, *pixel).and_then(|p| Preset::ALL.iter().position(|q| *q == p)) {
                 Some(i) => (i as i32 + dir).rem_euclid(n),
                 None if dir > 0 => 0,
                 None => n - 1,
@@ -1045,36 +1074,43 @@ pub struct SettingsState {
     pub page: Option<String>,
     pub editing: Option<String>,
     pub confirm: Option<SettingsAction>,
+    pub pixel: bool,
 }
 
 impl SettingsState {
-    pub fn new() -> Self {
+    pub fn new(pixel: bool) -> Self {
         Self {
             section: 0,
             item: 0,
             page: None,
             editing: None,
             confirm: None,
+            pixel,
         }
     }
 
-    pub fn reopen(left: Option<(SettingsState, Instant)>, cfg: &Config, now: Instant) -> Self {
+    pub fn reopen(left: Option<(SettingsState, Instant)>, cfg: &Config, pixel: bool, now: Instant) -> Self {
         let window = Duration::from_secs(cfg.controls.remember_settings_secs as u64);
         match left {
             Some((state, at)) if cfg.controls.remember_settings && now.saturating_duration_since(at) <= window => Self {
                 editing: None,
                 confirm: None,
+                pixel,
                 ..state
             },
-            _ => Self::new(),
+            _ => Self::new(pixel),
         }
+    }
+
+    pub fn sections(&self, cfg: &Config) -> Vec<Section> {
+        sections(cfg, self.pixel)
     }
 
     pub fn items(&self, cfg: &Config) -> Vec<Item> {
         match &self.page {
             Some(id) => provider_page(id),
             None => {
-                let mut secs = sections(cfg);
+                let mut secs = self.sections(cfg);
                 let i = self.section.min(secs.len() - 1);
                 secs.swap_remove(i).items
             }
@@ -1138,12 +1174,12 @@ fn reset_item(state: &mut SettingsState, cfg: &mut Config, kind: &Kind) -> bool 
             }
             before != (ordered_ids(cfg), cfg.providers.is_enabled(id))
         }
-        Kind::Preset | Kind::Action(_) | Kind::Info => false,
+        Kind::Preset { .. } | Kind::Action(_) | Kind::Info => false,
     }
 }
 
 pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) -> SettingsOutcome {
-    let secs = sections(cfg);
+    let secs = state.sections(cfg);
     state.section = state.section.min(secs.len() - 1);
     let items = state.items(cfg);
     state.item = state.item.min(items.len().saturating_sub(1));
@@ -1251,7 +1287,7 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
             state.item = 0;
         }
         KeyCode::Enter | KeyCode::Char(' ') => match &current.kind {
-            Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Preset => {
+            Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Preset { .. } => {
                 step_value(cfg, &current.kind, 1, false);
                 return SettingsOutcome::Changed;
             }
@@ -1313,7 +1349,7 @@ mod tests {
     #[test]
     fn reorders_providers() {
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
+        let mut st = SettingsState::new(true);
         st.item = 5;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('K'), KeyModifiers::SHIFT));
         assert_eq!(
@@ -1328,7 +1364,7 @@ mod tests {
     #[test]
     fn providers_tab_lists_only_providers() {
         let cfg = Config::default();
-        let items = &sections(&cfg)[0].items;
+        let items = &sections(&cfg, true)[0].items;
         assert_eq!(items.len(), 6);
         assert!(items.iter().all(|i| matches!(i.kind, Kind::Provider(_))));
         assert!(matches!(&items[0].kind, Kind::Provider(id) if id == crate::providers::local::ID));
@@ -1366,7 +1402,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("my-syncs")).unwrap();
         std::fs::write(dir.join("my-song.lrc"), "").unwrap();
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
+        let mut st = SettingsState::new(true);
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some(crate::providers::local::ID));
         st.item = st.items(&cfg).iter().position(|i| i.label == DEFAULT_LIBRARY_LABEL).unwrap();
@@ -1384,7 +1420,7 @@ mod tests {
     #[test]
     fn edits_secret_text_in_provider_page() {
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
+        let mut st = SettingsState::new(true);
         st.item = 1;
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some("spicy-lyrics"));
@@ -1404,7 +1440,7 @@ mod tests {
     #[test]
     fn provider_pages_have_their_own_tolerance() {
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
+        let mut st = SettingsState::new(true);
         st.item = 2;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('l'), KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some("lrc-red"));
@@ -1417,8 +1453,8 @@ mod tests {
     #[test]
     fn resets_selected_setting() {
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
-        st.section = sections(&cfg).iter().position(|s| s.title == "Sync").unwrap();
+        let mut st = SettingsState::new(true);
+        st.section = sections(&cfg, true).iter().position(|s| s.title == "Sync").unwrap();
         cfg.sync.offset_ms = 420;
         cfg.sync.smoothing = !Config::default().sync.smoothing;
         let out = handle_key(&mut st, &mut cfg, key(KeyCode::Char('r'), KeyModifiers::NONE));
@@ -1432,7 +1468,7 @@ mod tests {
     #[test]
     fn resets_provider_priority_and_state() {
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
+        let mut st = SettingsState::new(true);
         st.item = 3;
         handle_key(&mut st, &mut cfg, key(KeyCode::Char('K'), KeyModifiers::SHIFT));
         handle_key(&mut st, &mut cfg, key(KeyCode::Char(' '), KeyModifiers::NONE));
@@ -1446,16 +1482,31 @@ mod tests {
     #[test]
     fn applies_presets_from_appearance() {
         let mut cfg = Config::default();
-        let mut st = SettingsState::new();
-        st.section = sections(&cfg).iter().position(|s| s.title == "Appearance").unwrap();
+        let mut st = SettingsState::new(true);
+        st.section = sections(&cfg, true).iter().position(|s| s.title == "Appearance").unwrap();
         assert_eq!(value_text(&cfg, &st.items(&cfg)[0].kind), "Lyrminal");
         let out = handle_key(&mut st, &mut cfg, key(KeyCode::Left, KeyModifiers::NONE));
         assert!(matches!(out, SettingsOutcome::Changed));
-        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
-        cfg.appearance.glow = true;
+        assert_eq!(Preset::detect(&cfg, true), Some(Preset::SpicyLyrics));
+        cfg.appearance.glow = false;
         assert_eq!(value_text(&cfg, &st.items(&cfg)[0].kind), "custom");
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
-        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
+        assert_eq!(Preset::detect(&cfg, true), Some(Preset::SpicyLyrics));
+    }
+
+    #[test]
+    fn hides_pixel_settings_without_kitty_graphics() {
+        let cfg = Config::default();
+        let labels = |pixel: bool| -> Vec<String> {
+            sections(&cfg, pixel).into_iter().flat_map(|s| s.items).map(|i| i.label).collect()
+        };
+        let with = labels(true);
+        let without = labels(false);
+        for label in PIXEL_ONLY {
+            assert!(with.iter().any(|l| l == label), "{label} missing with pixel");
+            assert!(!without.iter().any(|l| l == label), "{label} shown without pixel");
+        }
+        assert!(find_item(&cfg, false, "Appearance", "Glow").is_some());
     }
 
     #[test]
@@ -1469,8 +1520,9 @@ mod tests {
                 page: Some(crate::providers::lrcred::ID.into()),
                 editing: Some("draft".into()),
                 confirm: Some(SettingsAction::ClearCache),
+                pixel: true,
             };
-            SettingsState::reopen(Some((left, at)), cfg, at + Duration::from_secs(after))
+            SettingsState::reopen(Some((left, at)), cfg, true, at + Duration::from_secs(after))
         };
         let st = back(&cfg, 10);
         assert_eq!((st.section, st.item, st.page.as_deref()), (0, 2, Some(crate::providers::lrcred::ID)));
@@ -1482,15 +1534,15 @@ mod tests {
         cfg.controls.remember_settings = false;
         let st = back(&cfg, 1);
         assert_eq!((st.section, st.item, st.page), (0, 0, None));
-        assert_eq!(SettingsState::reopen(None, &Config::default(), at).item, 0);
+        assert_eq!(SettingsState::reopen(None, &Config::default(), true, at).item, 0);
     }
 
     #[test]
     fn clamps_cache_ttl() {
         let mut cfg = Config::default();
         cfg.cache.ttl_days = 30;
-        let mut st = SettingsState::new();
-        st.section = sections(&cfg).iter().position(|s| s.title == "Cache").unwrap();
+        let mut st = SettingsState::new(true);
+        st.section = sections(&cfg, true).iter().position(|s| s.title == "Cache").unwrap();
         st.item = 1;
         handle_key(&mut st, &mut cfg, key(KeyCode::Right, KeyModifiers::NONE));
         assert_eq!(cfg.cache.ttl_days, 30);

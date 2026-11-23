@@ -806,6 +806,16 @@ mod tests {
     }
 
     #[test]
+    fn keeps_unsynced_closing_lines_at_the_end() {
+        let doc = r#"<tt xmlns="http://www.w3.org/ns/ttml" xmlns:lrc="x" lrc:timing="Word"><body><div><p begin="1.0" end="2.0"><span begin="1.0" end="2.0">first</span></p><p begin="3.0" end="4.0"><span begin="3.0" end="4.0">second</span></p><p begin="00:00:00.000" end="00:00:00.000"><span begin="00:00:00.000" end="00:00:00.000">outro</span></p></div></body></tt>"#;
+        let l = parse(doc, Credits::default()).unwrap();
+        assert_eq!(l.lines.len(), 3);
+        assert_eq!(l.lines[0].lead.text(), "first");
+        assert_eq!(l.lines[2].lead.text(), "outro");
+        assert!((l.lines[2].start - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn parses_times() {
         assert_eq!(parse_time("1:02.5"), Some(62.5));
         assert_eq!(parse_time("00:01:02.500"), Some(62.5));

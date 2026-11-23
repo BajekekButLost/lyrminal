@@ -21,7 +21,7 @@ Press `?` in the app for this list.
 | Key | Action |
 | --- | --- |
 | `v` | Switch style (Spring / Bloom) |
-| `m` | Switch renderer (cell / pixel) |
+| `m` | Switch renderer (cell / pixel). Only in terminals with kitty graphics; elsewhere it is hidden from the help and does nothing |
 | `t` | Toggle translation |
 | `r` | Toggle romanization |
 | `b` | Toggle background vocals |
@@ -46,7 +46,7 @@ Press `?` in the app for this list.
 
 ## Playback
 
-These only work after you turn on Settings → Controls → Playback controls.
+These need Settings → Controls → Playback controls, which is on by default. Turn it off to keep Lyrminal read-only.
 
 | Key | Action |
 | --- | --- |

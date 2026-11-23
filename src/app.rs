@@ -262,9 +262,6 @@ impl App {
         if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
             app.notify("Spicy Lyrics needs an API key: press Esc → Providers");
         }
-        if app.cfg.appearance.renderer == Renderer::Pixel && !app.pixel_supported() {
-            app.notify("Pixel renderer needs kitty graphics; using the cell renderer");
-        }
         app.ensure_fonts();
         app
     }
@@ -846,7 +843,7 @@ impl App {
     }
 
     fn open_settings(&mut self) {
-        let state = SettingsState::reopen(self.settings_left.take(), &self.cfg, Instant::now());
+        let state = SettingsState::reopen(self.settings_left.take(), &self.cfg, self.pixel_supported(), Instant::now());
         self.set_overlay(Overlay::Settings(state));
     }
 
@@ -1075,7 +1072,7 @@ impl App {
     }
 
     fn open_updates(&mut self) {
-        let secs = settings::sections(&self.cfg);
+        let secs = settings::sections(&self.cfg, self.pixel_supported());
         let Some(section) = secs.iter().position(|s| s.title == settings::UPDATES_SECTION) else { return };
         let item = secs[section].items.iter().position(|i| i.label == settings::UPDATE_LABEL).unwrap_or(0);
         self.open_settings();
@@ -1124,12 +1121,6 @@ impl App {
         let appearance_changed = json(&self.cfg.appearance) != json(&old.appearance);
         let lyrics_changed = json(&self.cfg.lyrics) != json(&old.lyrics);
         if appearance_changed {
-            if self.cfg.appearance.renderer == Renderer::Pixel
-                && old.appearance.renderer != Renderer::Pixel
-                && !self.pixel_supported()
-            {
-                self.notify("This terminal has no kitty graphics support, so the cell renderer stays on");
-            }
             self.load_artwork();
             self.retheme();
             self.ensure_fonts();
@@ -1527,8 +1518,7 @@ impl App {
                 self.notify(format!("Style: {name}"));
             }
             Action::ToggleRenderer => {
-                if !self.pixel_supported() && self.cfg.appearance.renderer == Renderer::Cell {
-                    self.notify("This terminal has no kitty graphics support");
+                if !self.pixel_supported() {
                     return;
                 }
                 self.toggle(|c| {
@@ -1652,12 +1642,21 @@ impl App {
             self.state.save();
         }
         self.toast = None;
-        let mut guide = Onboarding::new();
+        let mut guide = Onboarding::new(self.pixel_supported());
         if !self.cfg.providers.local_library.default_dir.trim().is_empty() {
             guide.stores_syncs = Some(true);
         }
+        let first = guide.first();
         self.guide = Some(guide);
-        self.guide_go(Step::Player);
+        self.guide_go(first);
+    }
+
+    fn guide_next(&self) -> Option<Step> {
+        self.guide.as_ref().and_then(Onboarding::next)
+    }
+
+    fn guide_prev(&self) -> Option<Step> {
+        self.guide.as_ref().and_then(Onboarding::prev)
     }
 
     fn finish_onboarding(&mut self, skipped: bool) {
@@ -1733,7 +1732,7 @@ impl App {
     }
 
     fn on_guide_key(&mut self, key: KeyEvent) -> bool {
-        let Some((rows, sel, step, editing)) = self.guide_state() else { return false };
+        let Some((rows, sel, _, editing)) = self.guide_state() else { return false };
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         if editing {
@@ -1801,7 +1800,7 @@ impl App {
                     _ => {}
                 }
             }
-            KeyCode::Enter | KeyCode::Char(' ') => self.guide_activate(row, step),
+            KeyCode::Enter | KeyCode::Char(' ') => self.guide_activate(row),
             KeyCode::Backspace | KeyCode::Delete if row.is_text() => {
                 if let Some(Kind::Text { set, .. }) = row.kind() {
                     let old = self.cfg.clone();
@@ -1809,7 +1808,7 @@ impl App {
                     self.apply_config(&old);
                 }
             }
-            KeyCode::Esc => match step.prev() {
+            KeyCode::Esc => match self.guide_prev() {
                 Some(prev) => self.guide_go(prev),
                 None => return false,
             },
@@ -1819,7 +1818,7 @@ impl App {
         true
     }
 
-    fn guide_activate(&mut self, row: &GuideRow, step: Step) {
+    fn guide_activate(&mut self, row: &GuideRow) {
         match row {
             GuideRow::Auto => {
                 let old = self.cfg.clone();
@@ -1862,17 +1861,17 @@ impl App {
                     self.guide = Some(g);
                 } else {
                     self.guide = Some(g);
-                    if let Some(next) = step.next() {
+                    if let Some(next) = self.guide_next() {
                         self.guide_go(next);
                     }
                 }
             }
-            GuideRow::Next => match step.next() {
+            GuideRow::Next => match self.guide_next() {
                 Some(next) => self.guide_go(next),
                 None => self.finish_onboarding(false),
             },
             GuideRow::Back => {
-                if let Some(prev) = step.prev() {
+                if let Some(prev) = self.guide_prev() {
                     self.guide_go(prev);
                 }
             }
@@ -1994,7 +1993,7 @@ mod tests {
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
         let mut app = App::new(Config::default(), TermCaps::default(), player_tx, msg_tx);
-        app.guide = Some(Onboarding::new());
+        app.guide = Some(Onboarding::new(false));
         app.guide_go(Step::Player);
         app
     }
@@ -2065,6 +2064,21 @@ mod tests {
         }
         app.on_action(Action::Settings);
         assert_eq!(spot(&app), Some((0, 0)));
+    }
+
+    #[tokio::test]
+    async fn text_only_tour_starts_with_the_terminal() {
+        let mut app = app();
+        app.guide = Some(Onboarding::new(false));
+        app.guide_go(Step::Terminal);
+        let shown = screen(&mut app, 160, 40);
+        assert!(shown.iter().any(|l| l.contains("Your terminal")));
+        assert!(shown.iter().any(|l| l.contains("Continue with the text look")));
+        assert!(shown.iter().any(|l| l.contains(" 1 / 7 ")));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(step(&app), Step::Player);
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(step(&app), Step::Terminal);
     }
 
     #[tokio::test]
@@ -2184,7 +2198,7 @@ mod tests {
 
         press(&mut app, KeyCode::Char('U'));
         let Overlay::Settings(s) = &app.overlay else { panic!("settings should be open") };
-        assert_eq!(settings::sections(&app.cfg)[s.section].title, settings::UPDATES_SECTION);
+        assert_eq!(s.sections(&app.cfg)[s.section].title, settings::UPDATES_SECTION);
         let shown = screen(&mut app, 160, 40);
         assert!(shown.iter().any(|l| l.contains("v9.9.9 available · install ↵")));
         assert!(shown.iter().any(|l| l.contains("Big one.")));

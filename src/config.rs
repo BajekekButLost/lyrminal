@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -65,7 +66,7 @@ impl Default for ScrollConfig {
         Self {
             animation: ScrollAnimation::Staggered,
             speed: 1.0,
-            lead_ms: 300,
+            lead_ms: 250,
             click_seek: ClickSeek::Lines,
         }
     }
@@ -322,7 +323,7 @@ pub struct AppearanceConfig {
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
-            renderer: Renderer::Cell,
+            renderer: Renderer::Pixel,
             style: VisualStyle::Spring,
             album_theming: true,
             background: Background::Gradient,
@@ -339,7 +340,7 @@ impl Default for AppearanceConfig {
             pixel_fps: 30,
             font_family: String::new(),
             font_weight: 700,
-            font_scale: 2.2,
+            font_scale: 2.0,
             glow: false,
             emphasis: true,
             syllable_spacing: SyllableSpacing::Joined,
@@ -373,7 +374,7 @@ impl Default for LyricsConfig {
             interlude_threshold_secs: 3.0,
             reserve_interlude_space: false,
             join_split_words: false,
-            resume_follow_secs: 4.0,
+            resume_follow_secs: 5.0,
         }
     }
 }
@@ -408,7 +409,7 @@ pub struct ControlsConfig {
 impl Default for ControlsConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             seek_step_secs: 5,
             remember_settings: true,
             remember_settings_secs: 30,
@@ -449,46 +450,48 @@ impl Preset {
     }
 
     pub fn apply(self, cfg: &mut Config) {
-        let d = Config::default();
+        let mut d = Config::default();
+        if self == Preset::SpicyLyrics {
+            d.appearance.font_scale = 2.2;
+            d.appearance.glow = true;
+            d.appearance.syllable_spacing = SyllableSpacing::Separate;
+            d.scroll.animation = ScrollAnimation::Smooth;
+            d.scroll.lead_ms = 0;
+        }
         let a = &mut cfg.appearance;
-        a.style = VisualStyle::Spring;
-        a.album_theming = true;
-        a.background = Background::Gradient;
-        a.album_art = true;
-        a.show_header = true;
-        a.alignment = Alignment::Left;
-        a.line_gap = d.appearance.line_gap;
-        a.depth_dimming = true;
-        a.fade_previous = false;
-        a.contrast = d.appearance.contrast;
-        a.font_weight = 700;
-        a.font_scale = d.appearance.font_scale;
-        a.glow = false;
-        a.emphasis = true;
+        let da = d.appearance;
+        a.renderer = da.renderer;
+        a.style = da.style;
+        a.album_theming = da.album_theming;
+        a.background = da.background;
+        a.album_art = da.album_art;
+        a.show_header = da.show_header;
+        a.alignment = da.alignment;
+        a.line_gap = da.line_gap;
+        a.depth_dimming = da.depth_dimming;
+        a.fade_previous = da.fade_previous;
+        a.contrast = da.contrast;
+        a.font_weight = da.font_weight;
+        a.font_scale = da.font_scale;
+        a.glow = da.glow;
+        a.emphasis = da.emphasis;
+        a.syllable_spacing = da.syllable_spacing;
+        cfg.scroll.animation = d.scroll.animation;
         cfg.scroll.speed = d.scroll.speed;
-        cfg.lyrics.background_vocals = true;
-        cfg.lyrics.interludes = true;
+        cfg.scroll.lead_ms = d.scroll.lead_ms;
+        cfg.lyrics.background_vocals = d.lyrics.background_vocals;
+        cfg.lyrics.interludes = d.lyrics.interludes;
         cfg.lyrics.interlude_threshold_secs = d.lyrics.interlude_threshold_secs;
         cfg.lyrics.reserve_interlude_space = d.lyrics.reserve_interlude_space;
-        cfg.lyrics.join_split_words = false;
-        match self {
-            Preset::SpicyLyrics => {
-                cfg.appearance.renderer = Renderer::Pixel;
-                cfg.appearance.syllable_spacing = SyllableSpacing::Separate;
-                cfg.scroll.animation = ScrollAnimation::Smooth;
-                cfg.scroll.lead_ms = 0;
-            }
-            Preset::Lyrminal => {
-                cfg.appearance.renderer = d.appearance.renderer;
-                cfg.appearance.syllable_spacing = d.appearance.syllable_spacing;
-                cfg.scroll.animation = d.scroll.animation;
-                cfg.scroll.lead_ms = d.scroll.lead_ms;
-            }
-        }
+        cfg.lyrics.join_split_words = d.lyrics.join_split_words;
     }
 
-    pub fn detect(cfg: &Config) -> Option<Preset> {
-        let current = serde_json::to_value(cfg).ok()?;
+    pub fn detect(cfg: &Config, pixel: bool) -> Option<Preset> {
+        let mut cfg = cfg.clone();
+        if !pixel {
+            cfg.appearance.renderer = Config::default().appearance.renderer;
+        }
+        let current = serde_json::to_value(&cfg).ok()?;
         Preset::ALL.into_iter().find(|p| {
             let mut c = cfg.clone();
             p.apply(&mut c);
@@ -497,29 +500,64 @@ impl Preset {
     }
 }
 
+static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_base_dir(dir: PathBuf) {
+    let _ = BASE_DIR.set(dir);
+}
+
+pub fn base_dir() -> Option<&'static Path> {
+    BASE_DIR.get().map(PathBuf::as_path)
+}
+
+fn user_dir(base_rel: &str, system: Option<PathBuf>) -> PathBuf {
+    match base_dir() {
+        Some(base) => base.join(base_rel),
+        None => system.unwrap_or_else(|| PathBuf::from(".")),
+    }
+    .join("lyrminal")
+}
+
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lyrminal")
+    user_dir(".config", dirs::config_dir())
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("lyrminal")
+    user_dir(".cache", dirs::cache_dir().or_else(|| Some(std::env::temp_dir())))
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lyrminal")
+    user_dir(".local/share", dirs::data_dir())
 }
 
 pub fn state_dir() -> PathBuf {
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lyrminal")
+    user_dir(".local/state", dirs::state_dir().or_else(dirs::data_local_dir))
+}
+
+pub fn prepare_base_dir(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let dir = fs::canonicalize(dir).with_context(|| format!("opening {}", dir.display()))?;
+    if !dir.is_dir() {
+        anyhow::bail!("{} is not a directory", dir.display());
+    }
+    Ok(dir)
+}
+
+pub fn create_temp_base_dir() -> Result<PathBuf> {
+    use std::hash::{BuildHasher, Hasher};
+    let root = std::env::temp_dir();
+    for _ in 0..16 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        h.write_u32(std::process::id());
+        let dir = root.join(format!("lyrminal-{:012x}", h.finish() & 0xffff_ffff_ffff));
+        match fs::create_dir(&dir) {
+            Ok(()) => return prepare_base_dir(&dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("creating {}", dir.display())),
+        }
+    }
+    anyhow::bail!("could not create a temporary base directory in {}", root.display())
 }
 
 impl Config {
@@ -566,7 +604,31 @@ mod tests {
 
     #[test]
     fn defaults_match_the_lyrminal_preset() {
-        assert_eq!(Preset::detect(&Config::default()), Some(Preset::Lyrminal));
+        assert_eq!(Preset::detect(&Config::default(), true), Some(Preset::Lyrminal));
+    }
+
+    #[test]
+    fn creates_missing_and_temporary_base_directories() {
+        let root = std::env::temp_dir().join(format!("lyrminal-base-test-{}", std::process::id()));
+        let nested = root.join("a/b");
+        let made = prepare_base_dir(&nested).unwrap();
+        assert!(made.is_dir() && made.is_absolute());
+        let temp = create_temp_base_dir().unwrap();
+        assert!(temp.is_dir());
+        assert!(temp.file_name().unwrap().to_string_lossy().starts_with("lyrminal-"));
+        let other = create_temp_base_dir().unwrap();
+        assert_ne!(temp, other);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir(&temp);
+        let _ = fs::remove_dir(&other);
+    }
+
+    #[test]
+    fn presets_ignore_the_renderer_without_pixel_support() {
+        let mut cfg = Config::default();
+        cfg.appearance.renderer = Renderer::Cell;
+        assert_eq!(Preset::detect(&cfg, true), None);
+        assert_eq!(Preset::detect(&cfg, false), Some(Preset::Lyrminal));
     }
 
     #[test]
@@ -575,15 +637,18 @@ mod tests {
         cfg.providers.spicy_lyrics.api_key = "sl_sk_kept".into();
         cfg.sync.offset_ms = 120;
         Preset::SpicyLyrics.apply(&mut cfg);
-        assert_eq!(Preset::detect(&cfg), Some(Preset::SpicyLyrics));
+        assert_eq!(Preset::detect(&cfg, true), Some(Preset::SpicyLyrics));
         assert_eq!(cfg.appearance.renderer, Renderer::Pixel);
         assert_eq!(cfg.appearance.syllable_spacing, SyllableSpacing::Separate);
         assert_eq!(cfg.scroll.animation, ScrollAnimation::Smooth);
+        assert_eq!(cfg.scroll.lead_ms, 0);
+        assert_eq!(cfg.appearance.font_scale, 2.2);
+        assert!(cfg.appearance.glow);
         assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_kept");
         assert_eq!(cfg.sync.offset_ms, 120);
         cfg.appearance.style = VisualStyle::Bloom;
-        assert_eq!(Preset::detect(&cfg), None);
+        assert_eq!(Preset::detect(&cfg, true), None);
         Preset::Lyrminal.apply(&mut cfg);
-        assert_eq!(Preset::detect(&cfg), Some(Preset::Lyrminal));
+        assert_eq!(Preset::detect(&cfg, true), Some(Preset::Lyrminal));
     }
 }
