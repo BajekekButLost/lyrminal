@@ -79,6 +79,10 @@ impl Theme {
         }
     }
 
+    pub fn backdrop(&self) -> Option<Rgb> {
+        (self.paint != Background::None).then_some(self.bg_bottom)
+    }
+
     pub fn bg_at(&self, y: u16, height: u16) -> Rgb {
         if height <= 1 {
             return self.bg_top;

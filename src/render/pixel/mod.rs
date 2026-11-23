@@ -22,6 +22,7 @@ const RASTER_STEP: f32 = 0.05;
 const BLUR_KEY_SCALE: f32 = 100.0;
 const SUBPIXEL_STEPS: f32 = 4.0;
 const MASK_TTL_FRAMES: u64 = 120;
+pub const BLEED_CELLS: u16 = 1;
 
 pub struct Fonts {
     pub system: FontSystem,
@@ -689,8 +690,8 @@ impl PixelRenderer {
 
     pub fn render(&mut self, input: &FrameInput, prepared_id: usize, screen: Rect, lyrics: Rect, cell: (f32, f32)) -> PixelFrame {
         let (cw, ch) = cell;
-        let w = (screen.width as f32 * cw).round().max(1.0) as usize;
-        let h = (screen.height as f32 * ch).round().max(1.0) as usize;
+        let w = ((screen.width + BLEED_CELLS) as f32 * cw).round().max(1.0) as usize;
+        let h = ((screen.height + BLEED_CELLS) as f32 * ch).round().max(1.0) as usize;
         self.canvas.resize(w, h);
         if input.theme.paint != Background::None {
             self.canvas.fill_gradient(input.theme.bg_top, input.theme.bg_bottom);
