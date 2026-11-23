@@ -281,6 +281,7 @@ In Settings → Lyrics:
 - **Romanization, translation and background vocals**: turn each on or off.
 - **Fix background lines**: on word-synced lyrics that have no background vocals, moves words in parentheses into a background line.
 - **Interlude dots**: shows dots during instrumental breaks, with a threshold for the shortest gap that counts.
+- **Reserve interlude space**: keeps an empty line for the dots at all times instead of pushing the lines below away when they appear.
 - **Join split words**: merges a word's syllables into one unit for a smoother wipe.
 
 ## Timing and sync

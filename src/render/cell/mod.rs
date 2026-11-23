@@ -9,6 +9,7 @@ use ratatui::style::{Modifier, Style};
 
 use self::layout::{Group, Layout, LayoutOptions, Row, RowKind, build, row_x};
 use super::effects::{self, EdgeWord, bloom, spring};
+use super::interlude::InterludeSpace;
 use super::lineanim::{LineAnims, LineLook};
 use super::scroll::{ScrollInput, Scroller};
 use super::{FrameInfo, FrameInput, Hit, LinkSpan};
@@ -24,6 +25,7 @@ pub struct CellRenderer {
     layout: Option<(usize, LayoutOptions, Arc<Layout>)>,
     scroller: Scroller,
     anims: LineAnims,
+    space: InterludeSpace,
     prepared_id: usize,
 }
 
@@ -122,16 +124,18 @@ impl CellRenderer {
         self.layout = None;
         self.scroller.reset();
         self.anims.reset();
+        self.space.reset();
     }
 
     pub fn is_animating(&self) -> bool {
-        self.scroller.is_animating()
+        self.scroller.is_animating() || self.space.is_animating()
     }
 
     fn layout_for(&mut self, prepared: &Prepared, prepared_id: usize, opts: LayoutOptions) -> Arc<Layout> {
         if prepared_id != self.prepared_id {
             self.prepared_id = prepared_id;
             self.scroller.reset();
+            self.space.reset();
         }
         if let Some((id, o, l)) = &self.layout
             && *id == prepared_id
@@ -168,10 +172,19 @@ impl CellRenderer {
         let t = if style == VisualStyle::Bloom { input.t - bloom::CLOCK_LAG } else { input.t };
         let anchor = (area.height as f64 * 0.4).floor();
         let (target, silence) = input.scroll_target(t);
+        let mut spacing = self.space.settle(
+            prepared,
+            &layout.item_tops,
+            layout.items_end,
+            t,
+            target,
+            input.wall,
+            input.lyrics.reserve_interlude_space,
+        );
         let auto_desired = if kind == SyncKind::Static {
             -1.0
         } else {
-            layout.item_tops.get(target).copied().unwrap_or(0.0) - anchor
+            spacing.tops.get(target).copied().unwrap_or(0.0) - anchor
         };
         let manual = input.follow.manual || kind == SyncKind::Static;
         let desired = if manual { input.follow.offset } else { auto_desired };
@@ -180,24 +193,29 @@ impl CellRenderer {
             dt: input.dt,
             desired,
             target,
-            tops: &layout.item_tops,
+            tops: &spacing.tops,
             mode: input.scroll_mode(),
             silence,
             viewport: area.height as f64,
             manual,
             speed: input.scroll.speed,
         });
+        if self.scroller.jumped() {
+            self.space.snap();
+        }
+        self.space.show(&mut spacing, input.wall);
         let base = self.scroller.base();
         info.base = if manual { input.follow.offset } else { auto_desired };
-        info.total = layout.total as f64;
+        info.total = layout.total as f64 - spacing.hidden_total();
         info.viewport = area.height as f64;
 
         let cursor_item = if input.follow.manual {
             let probe = base + anchor;
-            layout
-                .item_tops
+            spacing
+                .tops
                 .iter()
                 .enumerate()
+                .filter(|(i, _)| spacing.is_open(*i))
                 .min_by(|a, b| {
                     (a.1 - probe)
                         .abs()
@@ -219,7 +237,8 @@ impl CellRenderer {
         for block in &layout.blocks {
             last_item = block.item.or(last_item);
             let item_offset = last_item.map(|i| self.scroller.item_offset(i, input.wall)).unwrap_or(0.0);
-            let block_y = block.top as f64 - base + item_offset;
+            let shift = spacing.shift(block.item.unwrap_or(usize::MAX));
+            let block_y = block.top as f64 - shift - base + item_offset;
             if block_y > area.height as f64 + 1.0 || block_y + (block.rows.len() as f64) < -1.0 {
                 continue;
             }
@@ -446,7 +465,7 @@ impl CellRenderer {
                 }
             }
         }
-        info.animating = any_active || self.scroller.is_animating();
+        info.animating = any_active || self.scroller.is_animating() || self.space.is_animating();
         info
     }
 

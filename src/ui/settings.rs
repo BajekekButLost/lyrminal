@@ -762,6 +762,14 @@ pub fn sections(cfg: &Config) -> Vec<Section> {
                     },
                 ),
                 item(
+                    "Reserve interlude space",
+                    "Keep an empty line for the interlude dots at all times instead of pushing the lines below away when they appear.",
+                    Kind::Toggle {
+                        get: |c| c.lyrics.reserve_interlude_space,
+                        set: |c, v| c.lyrics.reserve_interlude_space = v,
+                    },
+                ),
+                item(
                     "Join split words",
                     "Merge syllables of one word into a single unit for a smoother wipe.",
                     Kind::Toggle {
