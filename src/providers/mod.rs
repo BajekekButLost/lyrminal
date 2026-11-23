@@ -213,6 +213,47 @@ impl fmt::Display for ProviderError {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct RateLimit {
+    pub provider: String,
+    pub retry: Option<u64>,
+}
+
+impl ProviderError {
+    pub fn rate_limit(&self, provider: &str) -> Option<RateLimit> {
+        match self {
+            ProviderError::RateLimited(retry) => Some(RateLimit {
+                provider: provider.to_string(),
+                retry: *retry,
+            }),
+            _ => None,
+        }
+    }
+}
+
+pub fn rate_limit_notice(limits: &[RateLimit], spicy_built_in_key: bool) -> Option<String> {
+    let mut names: Vec<&str> = Vec::new();
+    for l in limits {
+        if !names.contains(&l.provider.as_str()) {
+            names.push(&l.provider);
+        }
+    }
+    let who = match names.as_slice() {
+        [] => return None,
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    let when = match limits.iter().filter_map(|l| l.retry).max() {
+        Some(s) => format!("retry in {s}s"),
+        None => "retry in a moment".into(),
+    };
+    let mut msg = format!("{who} rate limited you, {when}");
+    if spicy_built_in_key && names.contains(&spicy::NAME) {
+        msg.push_str(" · your own Spicy Lyrics key avoids the shared limit");
+    }
+    Some(msg)
+}
+
 impl From<reqwest::Error> for ProviderError {
     fn from(e: reqwest::Error) -> Self {
         if e.is_decode() {
@@ -459,6 +500,19 @@ mod tests {
             let cands = p.search(&q).await.map(|c| c.len());
             println!("{}: search candidates {:?}", p.name(), cands.map_err(|e| e.to_string()));
         }
+    }
+
+    #[test]
+    fn builds_rate_limit_notices() {
+        assert_eq!(rate_limit_notice(&[], true), None);
+        let lrc = RateLimit { provider: "lrc.red".into(), retry: Some(12) };
+        assert_eq!(rate_limit_notice(std::slice::from_ref(&lrc), true).unwrap(), "lrc.red rate limited you, retry in 12s");
+        let spicy = RateLimit { provider: spicy::NAME.into(), retry: None };
+        let both = rate_limit_notice(&[spicy.clone(), lrc.clone(), spicy.clone()], true).unwrap();
+        assert_eq!(both, "Spicy Lyrics and lrc.red rate limited you, retry in 12s · your own Spicy Lyrics key avoids the shared limit");
+        assert_eq!(rate_limit_notice(&[spicy], false).unwrap(), "Spicy Lyrics rate limited you, retry in a moment");
+        assert!(ProviderError::NotFound.rate_limit("x").is_none());
+        assert_eq!(ProviderError::RateLimited(Some(3)).rate_limit("x"), Some(RateLimit { provider: "x".into(), retry: Some(3) }));
     }
 
     #[test]

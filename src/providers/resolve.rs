@@ -2,7 +2,7 @@ use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 
 use super::cache::Cache;
-use super::{Candidate, ProviderError, ProviderResult, Registry, TrackQuery};
+use super::{Candidate, ProviderError, ProviderResult, RateLimit, Registry, TrackQuery};
 use crate::config::MatchTier;
 use crate::lyrics::{Lyrics, SyncKind};
 
@@ -23,6 +23,7 @@ pub struct Attempt {
 pub struct Outcome {
     pub result: Option<Resolution>,
     pub attempts: Vec<Attempt>,
+    pub rate_limits: Vec<RateLimit>,
 }
 
 pub async fn fetch_candidate(registry: &Registry, cache: &Cache, c: &Candidate, bypass_cache: bool) -> ProviderResult<Lyrics> {
@@ -61,10 +62,14 @@ pub async fn resolve(
                 });
                 return out;
             }
-            Err(e) => out.attempts.push(Attempt {
-                provider: super::provider_name(&c.provider).to_string(),
-                outcome: format!("chosen sync failed: {e}"),
-            }),
+            Err(e) => {
+                let name = super::provider_name(&c.provider);
+                out.rate_limits.extend(e.rate_limit(name));
+                out.attempts.push(Attempt {
+                    provider: name.to_string(),
+                    outcome: format!("chosen sync failed: {e}"),
+                });
+            }
         }
     }
     let key = q.key();
@@ -136,10 +141,13 @@ pub async fn resolve(
                 provider: name.into(),
                 outcome: "no match".into(),
             }),
-            Err(e) => out.attempts.push(Attempt {
-                provider: name.into(),
-                outcome: e.to_string(),
-            }),
+            Err(e) => {
+                out.rate_limits.extend(e.rate_limit(name));
+                out.attempts.push(Attempt {
+                    provider: name.into(),
+                    outcome: e.to_string(),
+                });
+            }
         }
     }
     out.result = best;
