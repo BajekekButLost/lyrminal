@@ -1,5 +1,6 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -499,29 +500,64 @@ impl Preset {
     }
 }
 
+static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_base_dir(dir: PathBuf) {
+    let _ = BASE_DIR.set(dir);
+}
+
+pub fn base_dir() -> Option<&'static Path> {
+    BASE_DIR.get().map(PathBuf::as_path)
+}
+
+fn user_dir(base_rel: &str, system: Option<PathBuf>) -> PathBuf {
+    match base_dir() {
+        Some(base) => base.join(base_rel),
+        None => system.unwrap_or_else(|| PathBuf::from(".")),
+    }
+    .join("lyrminal")
+}
+
 pub fn config_dir() -> PathBuf {
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lyrminal")
+    user_dir(".config", dirs::config_dir())
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("lyrminal")
+    user_dir(".cache", dirs::cache_dir().or_else(|| Some(std::env::temp_dir())))
 }
 
 pub fn data_dir() -> PathBuf {
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lyrminal")
+    user_dir(".local/share", dirs::data_dir())
 }
 
 pub fn state_dir() -> PathBuf {
-    dirs::state_dir()
-        .or_else(dirs::data_local_dir)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("lyrminal")
+    user_dir(".local/state", dirs::state_dir().or_else(dirs::data_local_dir))
+}
+
+pub fn prepare_base_dir(dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+    let dir = fs::canonicalize(dir).with_context(|| format!("opening {}", dir.display()))?;
+    if !dir.is_dir() {
+        anyhow::bail!("{} is not a directory", dir.display());
+    }
+    Ok(dir)
+}
+
+pub fn create_temp_base_dir() -> Result<PathBuf> {
+    use std::hash::{BuildHasher, Hasher};
+    let root = std::env::temp_dir();
+    for _ in 0..16 {
+        let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+        h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        h.write_u32(std::process::id());
+        let dir = root.join(format!("lyrminal-{:012x}", h.finish() & 0xffff_ffff_ffff));
+        match fs::create_dir(&dir) {
+            Ok(()) => return prepare_base_dir(&dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e).with_context(|| format!("creating {}", dir.display())),
+        }
+    }
+    anyhow::bail!("could not create a temporary base directory in {}", root.display())
 }
 
 impl Config {
@@ -569,6 +605,22 @@ mod tests {
     #[test]
     fn defaults_match_the_lyrminal_preset() {
         assert_eq!(Preset::detect(&Config::default(), true), Some(Preset::Lyrminal));
+    }
+
+    #[test]
+    fn creates_missing_and_temporary_base_directories() {
+        let root = std::env::temp_dir().join(format!("lyrminal-base-test-{}", std::process::id()));
+        let nested = root.join("a/b");
+        let made = prepare_base_dir(&nested).unwrap();
+        assert!(made.is_dir() && made.is_absolute());
+        let temp = create_temp_base_dir().unwrap();
+        assert!(temp.is_dir());
+        assert!(temp.file_name().unwrap().to_string_lossy().starts_with("lyrminal-"));
+        let other = create_temp_base_dir().unwrap();
+        assert_ne!(temp, other);
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_dir(&temp);
+        let _ = fs::remove_dir(&other);
     }
 
     #[test]

@@ -31,7 +31,13 @@ const IDLE_FRAME: Duration = Duration::from_millis(250);
 fn usage() {
     println!(
         "Lyrminal v{} — synced lyrics in your terminal\n\n\
-         Usage: lyrminal [--help] [--version]\n\n\
+         Usage: lyrminal [options]\n\n\
+         Options:\n  \
+           -h, --help                    Show this help\n  \
+           -V, --version                 Show the version\n  \
+           --base-directory <dir>        Use <dir> as the home folder for Lyrminal's files\n                                \
+         ($BASE/.config/lyrminal, $BASE/.cache/lyrminal, ...); created if missing\n  \
+           --temp-base-directory         Same, in a new randomly named temporary folder\n\n\
          Everything else is configured inside the app (press Esc).\n\
          Config: {}",
         env!("CARGO_PKG_VERSION"),
@@ -39,18 +45,76 @@ fn usage() {
     );
 }
 
+enum Base {
+    Home,
+    Dir(String),
+    Temp,
+}
+
+fn fail(msg: &str) -> ! {
+    eprintln!("lyrminal: {msg}");
+    eprintln!("Run lyrminal --help for the options.");
+    std::process::exit(2);
+}
+
+enum Info {
+    Help,
+    Version,
+}
+
+fn parse_args() -> (Base, Option<Info>) {
+    let mut base = Base::Home;
+    let mut info = None;
+    let set = |b: Base, base: &mut Base| {
+        if !matches!(base, Base::Home) {
+            fail("use only one of --base-directory and --temp-base-directory");
+        }
+        *base = b;
+    };
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-h" | "--help" => info = Some(Info::Help),
+            "-V" | "--version" => info = info.or(Some(Info::Version)),
+            "--temp-base-directory" => set(Base::Temp, &mut base),
+            "--base-directory" => match args.next() {
+                Some(dir) if !dir.trim().is_empty() => set(Base::Dir(dir), &mut base),
+                _ => fail("--base-directory needs a folder"),
+            },
+            other => match other.strip_prefix("--base-directory=") {
+                Some(dir) if !dir.trim().is_empty() => set(Base::Dir(dir.to_string()), &mut base),
+                Some(_) => fail("--base-directory needs a folder"),
+                None => fail(&format!("unknown argument: {other}")),
+            },
+        }
+    }
+    (base, info)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    if let Some(arg) = std::env::args().nth(1) {
-        match arg.as_str() {
-            "-h" | "--help" => usage(),
-            "-V" | "--version" => println!("lyrminal {}", env!("CARGO_PKG_VERSION")),
-            other => {
-                eprintln!("unknown argument: {other}");
-                usage();
-                std::process::exit(2);
-            }
+    let (parsed, info) = parse_args();
+    if let Some(Info::Version) = info {
+        println!("lyrminal {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+    let temp = matches!(parsed, Base::Temp);
+    let base = match parsed {
+        Base::Home => None,
+        Base::Dir(dir) => Some(config::prepare_base_dir(&library::expand_path(&dir))),
+        Base::Temp if info.is_some() => None,
+        Base::Temp => Some(config::create_temp_base_dir()),
+    };
+    match base {
+        Some(Ok(dir)) => config::set_base_dir(dir),
+        Some(Err(e)) => {
+            eprintln!("lyrminal: {e:#}");
+            std::process::exit(1);
         }
+        None => {}
+    }
+    if info.is_some() {
+        usage();
         return Ok(());
     }
 
@@ -90,6 +154,9 @@ async fn main() -> Result<()> {
     }
     let _ = execute!(out, DisableBracketedPaste);
     ratatui::restore();
+    if temp && let Some(dir) = config::base_dir() {
+        eprintln!("lyrminal: the temporary base directory is {}", dir.display());
+    }
     if result.is_ok()
         && let Some(path) = app.restart_into.take()
     {

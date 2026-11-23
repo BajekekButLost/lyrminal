@@ -169,7 +169,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             item(
                 "API key",
                 &format!(
-                    "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in ~/.config/lyrminal/config.json. The {SPICY_KEY_ENV} environment variable overrides it."
+                    "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in {}. The {SPICY_KEY_ENV} environment variable overrides it.",
+                    Config::path().display()
                 ),
                 Kind::Text {
                     get: |c| c.providers.spicy_lyrics.api_key.clone(),

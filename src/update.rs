@@ -333,15 +333,22 @@ where
     Ok(dest)
 }
 
+fn restart_args() -> Vec<std::ffi::OsString> {
+    match crate::config::base_dir() {
+        Some(base) => vec!["--base-directory".into(), base.into()],
+        None => Vec::new(),
+    }
+}
+
 #[cfg(unix)]
 pub fn restart(path: &Path) -> std::io::Error {
     use std::os::unix::process::CommandExt;
-    std::process::Command::new(path).args(std::env::args_os().skip(1)).exec()
+    std::process::Command::new(path).args(restart_args()).exec()
 }
 
 #[cfg(not(unix))]
 pub fn restart(path: &Path) -> std::io::Error {
-    match std::process::Command::new(path).args(std::env::args_os().skip(1)).spawn() {
+    match std::process::Command::new(path).args(restart_args()).spawn() {
         Ok(_) => std::process::exit(0),
         Err(e) => e,
     }
