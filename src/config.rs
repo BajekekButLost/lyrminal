@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 pub const SPICY_KEY_ENV: &str = "SPICY_LYRICS_SECRET_KEY";
+pub const SPICY_PUBLIC_KEY: &str = "sl_pk_iF27rDC-HY7M9PLACMz25TWbHKEn1qG8bUNBD8Pw_hE";
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -224,6 +225,7 @@ impl ProvidersConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct SpicyConfig {
+    pub use_own_key: bool,
     pub api_key: String,
     pub min_tier: MatchTier,
     pub check_results: bool,
@@ -233,6 +235,7 @@ pub struct SpicyConfig {
 impl Default for SpicyConfig {
     fn default() -> Self {
         Self {
+            use_own_key: false,
             api_key: String::new(),
             min_tier: MatchTier::Exact,
             check_results: true,
@@ -242,7 +245,11 @@ impl Default for SpicyConfig {
 }
 
 impl SpicyConfig {
-    pub fn effective_key(&self) -> Option<String> {
+    pub fn effective_key(&self) -> String {
+        self.own_key().unwrap_or_else(|| SPICY_PUBLIC_KEY.to_string())
+    }
+
+    pub fn own_key(&self) -> Option<String> {
         if let Ok(k) = std::env::var(SPICY_KEY_ENV) {
             let k = k.trim().to_string();
             if !k.is_empty() {
@@ -250,7 +257,7 @@ impl SpicyConfig {
             }
         }
         let k = self.api_key.trim();
-        (!k.is_empty()).then(|| k.to_string())
+        (self.use_own_key && !k.is_empty()).then(|| k.to_string())
     }
 
     pub fn key_from_env(&self) -> bool {
@@ -572,11 +579,19 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::path();
         match fs::read_to_string(&path) {
-            Ok(text) => serde_json::from_str(&text)
-                .with_context(|| format!("invalid config at {}", path.display())),
+            Ok(text) => Self::parse(&text).with_context(|| format!("invalid config at {}", path.display())),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
         }
+    }
+
+    fn parse(text: &str) -> serde_json::Result<Self> {
+        let raw: serde_json::Value = serde_json::from_str(text)?;
+        let mut cfg: Self = serde_json::from_value(raw.clone())?;
+        if raw["providers"]["spicyLyrics"].get("useOwnKey").is_none() {
+            cfg.providers.spicy_lyrics.use_own_key = !cfg.providers.spicy_lyrics.api_key.trim().is_empty();
+        }
+        Ok(cfg)
     }
 
     pub fn save(&self) -> Result<()> {
@@ -633,6 +648,23 @@ mod tests {
         cfg.appearance.renderer = Renderer::Cell;
         assert_eq!(Preset::detect(&cfg, true), None);
         assert_eq!(Preset::detect(&cfg, false), Some(Preset::Lyrminal));
+    }
+
+    #[test]
+    fn spicy_key_defaults_to_built_in_and_keeps_saved_keys() {
+        let fresh = Config::parse("{}").unwrap();
+        assert!(!fresh.providers.spicy_lyrics.use_own_key);
+        let saved = Config::parse(r#"{"providers":{"spicyLyrics":{"apiKey":"sl_sk_old"}}}"#).unwrap();
+        assert!(saved.providers.spicy_lyrics.use_own_key);
+        let off = Config::parse(r#"{"providers":{"spicyLyrics":{"apiKey":"sl_sk_old","useOwnKey":false}}}"#).unwrap();
+        assert!(!off.providers.spicy_lyrics.use_own_key);
+        if !saved.providers.spicy_lyrics.key_from_env() {
+            assert_eq!(saved.providers.spicy_lyrics.effective_key(), "sl_sk_old");
+            assert_eq!(off.providers.spicy_lyrics.effective_key(), SPICY_PUBLIC_KEY);
+            let mut empty = Config::default();
+            empty.providers.spicy_lyrics.use_own_key = true;
+            assert_eq!(empty.providers.spicy_lyrics.effective_key(), SPICY_PUBLIC_KEY);
+        }
     }
 
     #[test]

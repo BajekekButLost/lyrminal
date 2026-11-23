@@ -14,14 +14,14 @@ const BASE: &str = "https://api.spicylyrics.org";
 
 pub struct SpicyLyrics {
     client: reqwest::Client,
-    key: Option<String>,
+    key: String,
     min_tier: MatchTier,
     check_results: Option<usize>,
     gate: Arc<RateGate>,
 }
 
 impl SpicyLyrics {
-    pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier, check_results: Option<usize>) -> Self {
+    pub fn new(client: reqwest::Client, key: String, min_tier: MatchTier, check_results: Option<usize>) -> Self {
         Self {
             client,
             key,
@@ -31,16 +31,9 @@ impl SpicyLyrics {
         }
     }
 
-    fn key(&self) -> ProviderResult<&str> {
-        self.key
-            .as_deref()
-            .ok_or_else(|| ProviderError::NotConfigured("Spicy Lyrics API key is not set".into()))
-    }
-
     async fn get_json(&self, url: &str, query: &[(&str, String)]) -> ProviderResult<serde_json::Value> {
-        let key = self.key()?;
         self.gate.acquire().await?;
-        let result = self.send(key, url, query).await;
+        let result = self.send(&self.key, url, query).await;
         self.gate.observe(result).await
     }
 
@@ -160,16 +153,11 @@ impl LyricsProvider for SpicyLyrics {
     }
 
     fn ready(&self) -> Result<(), String> {
-        if self.key.is_some() {
-            Ok(())
-        } else {
-            Err("API key not set".into())
-        }
+        Ok(())
     }
 
     fn lookup<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Option<(Candidate, Lyrics)>>> {
         Box::pin(async move {
-            self.key()?;
             let direct = q.spotify_id.clone().or_else(|| q.isrc.clone());
             if let Some(id) = direct {
                 return match self.lyrics_by_id(&id).await {
@@ -214,7 +202,6 @@ impl LyricsProvider for SpicyLyrics {
 
     fn search<'a>(&'a self, q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Vec<Candidate>>> {
         Box::pin(async move {
-            self.key()?;
             let mut out = Vec::new();
             if let Some(id) = &q.spotify_id {
                 out.push(Candidate {

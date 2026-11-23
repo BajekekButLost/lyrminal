@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::anim::Rgb;
 use crate::app::{App, LyricsState};
-use crate::config::{Config, PlayerMode, Preset, VisualStyle};
+use crate::config::{PlayerMode, Preset, VisualStyle};
 use crate::lyrics::SyncKind;
 use crate::providers::{ordered_ids, provider_name};
 use crate::theme::Theme;
@@ -175,7 +175,7 @@ impl Onboarding {
                     .find(|i| matches!(i.kind, Kind::Text { .. }))
                 {
                     key.label = "Spicy Lyrics API key".into();
-                    key.desc = format!("Optional. {} Without one, Spicy Lyrics is skipped and the other providers are used.", key.desc);
+                    key.desc = "Optional. Spicy Lyrics already works with Lyrminal's built-in key. A secret key of your own from developers.spicylyrics.org → Dashboard → Applications gets a rate limit of its own, and entering it switches Spicy Lyrics over to it.".into();
                     rows.push(Row::Setting(key));
                 }
                 rows.extend([Row::Next, Row::Back, Row::Skip]);
@@ -338,10 +338,6 @@ fn row_value(row: &Row, app: &App, editing: Option<&str>) -> String {
     }
 }
 
-fn spicy_waiting(cfg: &Config) -> bool {
-    cfg.providers.is_enabled(crate::providers::spicy::ID) && cfg.providers.spicy_lyrics.effective_key().is_none()
-}
-
 fn row_desc(row: &Row, step: Step, app: &App) -> String {
     let cfg = &app.cfg;
     match row {
@@ -367,7 +363,7 @@ fn row_desc(row: &Row, step: Step, app: &App) -> String {
                 s.push_str(" Add your own lyrics to it any time with L.");
             }
             if id == crate::providers::spicy::ID {
-                s.push_str(" It needs a free API key, set below.");
+                s.push_str(" It works without an API key; adding your own below is optional.");
             }
             s
         }
@@ -379,9 +375,6 @@ fn row_desc(row: &Row, step: Step, app: &App) -> String {
             Step::Player => "Go on to the lyrics providers.".into(),
             Step::Providers if ordered_ids(cfg).iter().all(|id| !cfg.providers.is_enabled(id)) => {
                 "Every provider is off, so no lyrics can be found. Turn one on first.".into()
-            }
-            Step::Providers if spicy_waiting(cfg) => {
-                "Spicy Lyrics has no API key yet, so it is skipped until you add one. The other providers still work.".into()
             }
             Step::Providers => "Go on to your own syncs.".into(),
             Step::Library => "Go on and play a song.".into(),
@@ -455,8 +448,6 @@ fn status(step: Step, app: &App, found_at: Option<Instant>) -> Vec<(Tone, String
             let on = ordered_ids(cfg).into_iter().filter(|id| cfg.providers.is_enabled(id)).count();
             if on == 0 {
                 out.push((Tone::Bad, "✗ Every provider is off".into()));
-            } else if spicy_waiting(cfg) {
-                out.push((Tone::Bad, "Spicy Lyrics is waiting for an API key".into()));
             } else {
                 out.push((Tone::Good, format!("✓ {on} provider{} ready", if on == 1 { "" } else { "s" })));
             }

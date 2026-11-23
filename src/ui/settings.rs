@@ -167,14 +167,27 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                 },
             ),
             item(
+                "Use your own key",
+                "Off: Spicy Lyrics works out of the box with Lyrminal's built-in key, shared by everyone. On: uses the API key below, with a rate limit of its own. Entering a key turns this on.",
+                Kind::Toggle {
+                    get: |c| c.providers.spicy_lyrics.use_own_key,
+                    set: |c, v| c.providers.spicy_lyrics.use_own_key = v,
+                },
+            ),
+            item(
                 "API key",
                 &format!(
-                    "Secret key from developers.spicylyrics.org → Dashboard → Applications. Stored in {}. The {SPICY_KEY_ENV} environment variable overrides it.",
+                    "Optional. Secret key from developers.spicylyrics.org → Dashboard → Applications, used when Use your own key is on. Stored in {}. The {SPICY_KEY_ENV} environment variable overrides it, even when Use your own key is off.",
                     Config::path().display()
                 ),
                 Kind::Text {
                     get: |c| c.providers.spicy_lyrics.api_key.clone(),
-                    set: |c, v| c.providers.spicy_lyrics.api_key = v.trim().to_string(),
+                    set: |c, v| {
+                        c.providers.spicy_lyrics.api_key = v.trim().to_string();
+                        if !c.providers.spicy_lyrics.api_key.is_empty() {
+                            c.providers.spicy_lyrics.use_own_key = true;
+                        }
+                    },
                     secret: true,
                     placeholder: "sl_sk_…",
                     folder: false,
@@ -1030,12 +1043,7 @@ pub fn value_text(cfg: &Config, kind: &Kind) -> String {
         Kind::Provider(id) => {
             let pos = ordered_ids(cfg).iter().position(|p| p == id).map(|p| p + 1).unwrap_or(0);
             let on = cfg.providers.is_enabled(id);
-            let ready = if id == crate::providers::spicy::ID && cfg.providers.spicy_lyrics.effective_key().is_none() {
-                " · needs key"
-            } else {
-                ""
-            };
-            format!("#{pos} {}{ready}", if on { "on" } else { "off" })
+            format!("#{pos} {}", if on { "on" } else { "off" })
         }
         Kind::Preset { pixel } => Preset::detect(cfg, *pixel).map(|p| p.label()).unwrap_or("custom").into(),
         Kind::Action(_) => "↵".into(),
@@ -1445,13 +1453,15 @@ mod tests {
         st.item = 1;
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert_eq!(st.page.as_deref(), Some("spicy-lyrics"));
-        st.item = 1;
+        assert!(!cfg.providers.spicy_lyrics.use_own_key);
+        st.item = 2;
         handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         paste(&mut st, "sl_sk_abcd1234\n");
         let out = handle_key(&mut st, &mut cfg, key(KeyCode::Enter, KeyModifiers::NONE));
         assert!(matches!(out, SettingsOutcome::Changed));
         assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_abcd1234");
-        let shown = value_text(&cfg, &provider_page("spicy-lyrics")[1].kind);
+        assert!(cfg.providers.spicy_lyrics.use_own_key);
+        let shown = value_text(&cfg, &provider_page("spicy-lyrics")[2].kind);
         assert!(shown.ends_with("1234") && !shown.contains("abcd"));
         handle_key(&mut st, &mut cfg, key(KeyCode::Esc, KeyModifiers::NONE));
         assert!(st.page.is_none());

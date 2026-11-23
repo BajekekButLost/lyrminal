@@ -259,9 +259,6 @@ impl App {
             next_update_check: None,
             restart_into: None,
         };
-        if app.cfg.providers.spicy_lyrics.effective_key().is_none() && app.cfg.providers.is_enabled(crate::providers::spicy::ID) {
-            app.notify("Spicy Lyrics needs an API key: press Esc → Providers");
-        }
         app.ensure_fonts();
         app
     }
@@ -1096,7 +1093,7 @@ impl App {
             if matches!(self.lyrics, LyricsState::NotFound(_) | LyricsState::Ready { .. }) && self.track.is_some() {
                 let manual = matches!(&self.lyrics, LyricsState::Ready { resolution, .. } if resolution.manual);
                 let order_changed = ordered_ids(&self.cfg) != ordered_ids(old) || self.cfg.providers.disabled != old.providers.disabled;
-                let key_changed = self.cfg.providers.spicy_lyrics.api_key != old.providers.spicy_lyrics.api_key;
+                let key_changed = self.cfg.providers.spicy_lyrics.effective_key() != old.providers.spicy_lyrics.effective_key();
                 if !manual && (order_changed || key_changed || matches!(self.lyrics, LyricsState::NotFound(_))) {
                     self.schedule_fetch(Duration::from_millis(600));
                 }
