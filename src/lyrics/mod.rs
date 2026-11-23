@@ -82,6 +82,10 @@ impl VocalGroup {
         }
     }
 
+    pub fn keeps_syllables_whole(&self, kind: SyncKind) -> bool {
+        kind == SyncKind::Syllable && self.syllables.len() > 1
+    }
+
     pub fn single(text: String, start: f64, end: f64) -> Self {
         Self {
             start,
