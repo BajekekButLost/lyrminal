@@ -1,6 +1,7 @@
 pub mod kitty;
 
-use std::io::Write;
+use std::io::{self, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::anim::Rgb;
@@ -22,12 +23,51 @@ impl TermCaps {
     }
 }
 
+static BACKDROP_SET: AtomicBool = AtomicBool::new(false);
+
+#[derive(Default)]
+pub struct Backdrop {
+    sent: Option<[u8; 3]>,
+}
+
+impl Backdrop {
+    pub fn sync(&mut self, out: &mut impl Write, want: Option<Rgb>) -> io::Result<()> {
+        let want = want.map(Rgb::to_u8);
+        if want == self.sent {
+            return Ok(());
+        }
+        match want {
+            Some([r, g, b]) => write!(out, "\x1b]11;rgb:{r:02x}/{g:02x}/{b:02x}\x1b\\")?,
+            None => out.write_all(b"\x1b]111\x1b\\")?,
+        }
+        self.sent = want;
+        BACKDROP_SET.store(want.is_some(), Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn reset(&mut self, out: &mut impl Write) -> io::Result<()> {
+        self.sync(out, None)
+    }
+}
+
+pub fn reset_backdrop_on_panic() {
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if BACKDROP_SET.swap(false, Ordering::Relaxed) {
+            let mut out = std::io::stdout();
+            let _ = out.write_all(b"\x1b]111\x1b\\");
+            let _ = out.flush();
+        }
+        hook(info);
+    }));
+}
+
 pub fn cell_size() -> Option<(f32, f32)> {
     let ws = crossterm::terminal::window_size().ok()?;
     if ws.width == 0 || ws.height == 0 || ws.columns == 0 || ws.rows == 0 {
         return None;
     }
-    Some((ws.width as f32 / ws.columns as f32, ws.height as f32 / ws.rows as f32))
+    Some(((ws.width / ws.columns).max(1) as f32, (ws.height / ws.rows).max(1) as f32))
 }
 
 #[cfg(unix)]
@@ -120,5 +160,20 @@ mod tests {
         let c = parse_osc11("\x1b]11;rgb:1a1a/1b1b/2626\x1b\\").unwrap();
         assert!((c.r - 0x1a1a as f32 / 65535.0).abs() < 1e-4);
         assert!(has_da1(b"\x1b_Gi=31;OK\x1b\\\x1b[?62;22c"));
+    }
+
+    #[test]
+    fn backdrop_sets_and_restores_only_on_change() {
+        let mut b = Backdrop::default();
+        let mut out = Vec::new();
+        b.sync(&mut out, None).unwrap();
+        assert!(out.is_empty());
+        b.sync(&mut out, Some(Rgb::new(1.0, 0.0, 0.2))).unwrap();
+        b.sync(&mut out, Some(Rgb::new(1.0, 0.0, 0.2))).unwrap();
+        assert_eq!(out, b"\x1b]11;rgb:ff/00/33\x1b\\");
+        out.clear();
+        b.reset(&mut out).unwrap();
+        b.reset(&mut out).unwrap();
+        assert_eq!(out, b"\x1b]111\x1b\\");
     }
 }

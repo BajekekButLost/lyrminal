@@ -130,6 +130,7 @@ async fn main() -> Result<()> {
 
     let caps = term::probe();
     let mut terminal = ratatui::init();
+    term::reset_backdrop_on_panic();
     let mut mouse = cfg.appearance.mouse;
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     if mouse {
@@ -142,11 +143,13 @@ async fn main() -> Result<()> {
     app.maybe_onboard(fresh);
     app.enable_update_checks();
     let mut gfx = Graphics::default();
+    let mut backdrop = term::Backdrop::default();
 
-    let result = run(&mut terminal, &mut app, &mut gfx, player_rx, msg_rx, &mut mouse).await;
+    let result = run(&mut terminal, &mut app, &mut gfx, &mut backdrop, player_rx, msg_rx, &mut mouse).await;
 
     let mut out = std::io::stdout();
     let _ = gfx.clear(&mut out);
+    let _ = backdrop.reset(&mut out);
     let _ = out.flush();
     term::kitty::cleanup_temp_files();
     if mouse {
@@ -171,6 +174,7 @@ async fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     gfx: &mut Graphics,
+    backdrop: &mut term::Backdrop,
     mut player_rx: mpsc::UnboundedReceiver<player::PlayerEvent>,
     mut msg_rx: mpsc::UnboundedReceiver<app::AppMsg>,
     mouse: &mut bool,
@@ -218,13 +222,15 @@ async fn run(
         let pixel = output.as_ref().is_some_and(|o| o.pixel);
         if let Some(out) = output {
             let mut stdout = std::io::stdout().lock();
+            backdrop.sync(&mut stdout, app.theme.backdrop())?;
             if resized {
                 gfx.screen_cleared(&mut stdout)?;
             }
             if out.pixel {
                 if let Some(p) = app.pixel.as_ref() {
                     let size = terminal.size()?;
-                    gfx.send_pixel(&mut stdout, &p.canvas, size.width, size.height, app.caps.remote)?;
+                    let bleed = render::pixel::BLEED_CELLS;
+                    gfx.send_pixel(&mut stdout, &p.canvas, size.width + bleed, size.height + bleed, app.caps.remote)?;
                 }
             } else {
                 gfx.clear_pixel(&mut stdout)?;
