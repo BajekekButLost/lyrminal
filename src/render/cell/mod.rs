@@ -520,8 +520,8 @@ impl CellRenderer {
                     (spring::ACTIVE_UNLIT, spring::ACTIVE_LIT)
                 };
                 match item_state {
-                    State::NotSung => ink.alpha = if background { spring::NOT_SUNG * 0.8 } else { spring::NOT_SUNG },
-                    State::Sung => ink.alpha = if background { spring::SUNG * 0.8 } else { spring::SUNG },
+                    State::NotSung => ink.alpha = if background { spring::NOT_SUNG * spring::BG_REST } else { spring::NOT_SUNG },
+                    State::Sung => ink.alpha = if background { spring::SUNG * spring::BG_REST } else { spring::SUNG },
                     State::Active => {
                         if kind == SyncKind::Line {
                             let p = process::progress(t, it.start, prepared.lyrics.lines[li].end);
@@ -567,7 +567,7 @@ impl CellRenderer {
             }
             VisualStyle::Bloom => {
                 let lit_tone = if background { bloom::BG_LIT } else { bloom::LIT };
-                let unlit = bloom::UNLIT;
+                let unlit = if background { bloom::BG_UNLIT } else { bloom::UNLIT };
                 match item_state {
                     State::NotSung => ink.alpha = unlit,
                     State::Sung => {

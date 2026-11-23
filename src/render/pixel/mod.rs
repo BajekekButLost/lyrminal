@@ -981,7 +981,7 @@ impl PixelRenderer {
         let (unlit, lit) = match style {
             VisualStyle::Spring if background => (spring::BG_UNLIT, spring::BG_LIT),
             VisualStyle::Spring => (spring::ACTIVE_UNLIT, spring::ACTIVE_LIT),
-            VisualStyle::Bloom if background => (bloom::UNLIT, bloom::BG_LIT),
+            VisualStyle::Bloom if background => (bloom::BG_UNLIT, bloom::BG_LIT),
             VisualStyle::Bloom => (bloom::UNLIT, bloom::LIT),
         };
         let words = process::words(group);
@@ -1211,15 +1211,16 @@ fn rest_alpha(input: &FrameInput, rest: State, part: &Part, line: &LyricLine, t:
     }
     let mut a = match (style, rest) {
         (VisualStyle::Bloom, State::Sung) => {
-            let lit = if part.background { bloom::BG_LIT } else { bloom::LIT };
-            lerp(lit as f64, bloom::UNLIT as f64, effects::bloom_sung_dim(t - line.full_end())) as f32
+            let (lit, unlit) = if part.background { (bloom::BG_LIT, bloom::BG_UNLIT) } else { (bloom::LIT, bloom::UNLIT) };
+            lerp(lit as f64, unlit as f64, effects::bloom_sung_dim(t - line.full_end())) as f32
         }
+        (VisualStyle::Bloom, _) if part.background => bloom::BG_UNLIT,
         (VisualStyle::Bloom, _) => bloom::UNLIT,
         (VisualStyle::Spring, State::Sung) => spring::SUNG,
         _ => spring::NOT_SUNG,
     };
     if part.background && style == VisualStyle::Spring {
-        a *= 0.8;
+        a *= spring::BG_REST;
     }
     if matches!(part.kind, PartKind::Roman { timed: true, .. }) {
         a *= 0.82;

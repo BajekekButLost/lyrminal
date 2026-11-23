@@ -34,8 +34,9 @@ pub mod spring {
     pub const ACTIVE_UNLIT: f32 = 0.5;
     pub const ACTIVE_LIT: f32 = 0.88;
     pub const LINE_UNLIT: f32 = 0.38;
-    pub const BG_UNLIT: f32 = 0.26;
-    pub const BG_LIT: f32 = 0.8;
+    pub const BG_UNLIT: f32 = 0.22;
+    pub const BG_LIT: f32 = 0.7;
+    pub const BG_REST: f32 = 0.7;
     pub const LETTER_TAIL: f64 = 0.25;
     pub const DOT_GROW: f64 = 0.3;
     pub const DOT_APPEAR: f64 = 0.14;
@@ -44,7 +45,8 @@ pub mod spring {
 pub mod bloom {
     pub const UNLIT: f32 = 0.2;
     pub const LIT: f32 = 0.94;
-    pub const BG_LIT: f32 = 0.78;
+    pub const BG_UNLIT: f32 = 0.16;
+    pub const BG_LIT: f32 = 0.68;
     pub const SUNG_DELAY: f64 = 0.25;
     pub const SUNG_FADE: f64 = 0.35;
     pub const ROW_RUSH: f64 = 0.5;
