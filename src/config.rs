@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 pub const SPICY_KEY_ENV: &str = "SPICY_LYRICS_SECRET_KEY";
 pub const SPICY_PUBLIC_KEY: &str = "sl_pk_iF27rDC-HY7M9PLACMz25TWbHKEn1qG8bUNBD8Pw_hE";
+pub const SPICY_CHECKED_RESULTS: std::ops::RangeInclusive<u32> = 1..=20;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -591,6 +592,8 @@ impl Config {
         if raw["providers"]["spicyLyrics"].get("useOwnKey").is_none() {
             cfg.providers.spicy_lyrics.use_own_key = !cfg.providers.spicy_lyrics.api_key.trim().is_empty();
         }
+        let checked = &mut cfg.providers.spicy_lyrics.checked_results;
+        *checked = (*checked).clamp(*SPICY_CHECKED_RESULTS.start(), *SPICY_CHECKED_RESULTS.end());
         Ok(cfg)
     }
 
@@ -665,6 +668,22 @@ mod tests {
             empty.providers.spicy_lyrics.use_own_key = true;
             assert_eq!(empty.providers.spicy_lyrics.effective_key(), SPICY_PUBLIC_KEY);
         }
+    }
+
+    #[test]
+    fn keeps_checked_results_in_range() {
+        let checked = |n: i64| {
+            Config::parse(&format!(r#"{{"providers":{{"spicyLyrics":{{"checkedResults":{n}}}}}}}"#))
+                .unwrap()
+                .providers
+                .spicy_lyrics
+                .checked_results
+        };
+        assert_eq!(checked(0), 1);
+        assert_eq!(checked(7), 7);
+        assert_eq!(checked(20), 20);
+        assert_eq!(checked(500), 20);
+        assert_eq!(Config::parse("{}").unwrap().providers.spicy_lyrics.checked_results, 5);
     }
 
     #[test]

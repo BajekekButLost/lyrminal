@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::config::{
-    Alignment, Background, ClickSeek, Config, MatchTier, PlayerMode, Preset, Renderer, SPICY_KEY_ENV, ScrollAnimation,
+    Alignment, Background, ClickSeek, Config, MatchTier, PlayerMode, Preset, Renderer, SPICY_CHECKED_RESULTS, SPICY_KEY_ENV, ScrollAnimation,
     SyllableSpacing, VisualStyle,
 };
 use crate::providers::cache::MAX_TTL_DAYS;
@@ -214,8 +214,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                 "Results to check",
                 "How many search results Check results asks lyrics for. Each one is a request against your key's limit of 60 a minute, and the rest are not listed.",
                 Kind::Number {
-                    min: 1.0,
-                    max: 20.0,
+                    min: *SPICY_CHECKED_RESULTS.start() as f64,
+                    max: *SPICY_CHECKED_RESULTS.end() as f64,
                     step: 1.0,
                     decimals: 0,
                     unit: "",
