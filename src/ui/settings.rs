@@ -190,6 +190,14 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                 },
             ),
             item(
+                "Check results",
+                "Spicy Lyrics' search finds tracks, not lyrics. On: the sync picker asks for the lyrics of the first 5 results and only lists those that have them. Off: lists every result, even ones without lyrics, at the cost of one request instead of up to 6.",
+                Kind::Toggle {
+                    get: |c| c.providers.spicy_lyrics.check_results,
+                    set: |c, v| c.providers.spicy_lyrics.check_results = v,
+                },
+            ),
+            item(
                 "Lookups",
                 "By Spotify id when the player exposes one (Spotify, spotifast), otherwise by searching title, artist, album and length.",
                 Kind::Info,

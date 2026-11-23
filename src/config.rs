@@ -226,6 +226,7 @@ impl ProvidersConfig {
 pub struct SpicyConfig {
     pub api_key: String,
     pub min_tier: MatchTier,
+    pub check_results: bool,
 }
 
 impl Default for SpicyConfig {
@@ -233,6 +234,7 @@ impl Default for SpicyConfig {
         Self {
             api_key: String::new(),
             min_tier: MatchTier::Exact,
+            check_results: true,
         }
     }
 }

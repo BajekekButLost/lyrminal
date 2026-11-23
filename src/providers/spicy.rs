@@ -1,4 +1,4 @@
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, join_all};
 use serde::Deserialize;
 
 use std::sync::Arc;
@@ -11,20 +11,23 @@ use crate::lyrics::{Contributor, Credits, LyricLine, Lyrics, Syllable, SyncKind,
 pub const ID: &str = "spicy-lyrics";
 pub const NAME: &str = "Spicy Lyrics";
 const BASE: &str = "https://api.spicylyrics.org";
+const CHECKED_RESULTS: usize = 5;
 
 pub struct SpicyLyrics {
     client: reqwest::Client,
     key: Option<String>,
     min_tier: MatchTier,
+    check_results: bool,
     gate: Arc<RateGate>,
 }
 
 impl SpicyLyrics {
-    pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier) -> Self {
+    pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier, check_results: bool) -> Self {
         Self {
             client,
             key,
             min_tier,
+            check_results,
             gate: gate_for(ID, Duration::from_millis(250)),
         }
     }
@@ -92,6 +95,28 @@ impl SpicyLyrics {
         let json = self.get_json(&format!("{BASE}/v1/tracks/search"), &query).await?;
         let results = json["Body"]["results"].clone();
         serde_json::from_value(results).map_err(|e| ProviderError::Parse(e.to_string()))
+    }
+
+    async fn keep_available(&self, candidates: Vec<Candidate>) -> ProviderResult<Vec<Candidate>> {
+        let probes = join_all(candidates.iter().map(|c| self.lyrics_by_id(&c.id))).await;
+        let mut kept = Vec::new();
+        let mut failure = None;
+        for (mut c, probe) in candidates.into_iter().zip(probes) {
+            match probe {
+                Ok(lyrics) => {
+                    c.kind_hint = Some(lyrics.kind);
+                    kept.push(c);
+                }
+                Err(ProviderError::NotFound) => {}
+                Err(e) => {
+                    failure.get_or_insert(e);
+                }
+            }
+        }
+        match failure {
+            Some(e) if kept.is_empty() => Err(e),
+            _ => Ok(kept),
+        }
     }
 
     fn candidate(&self, r: &SearchResult, id: &str, album: Option<String>, duration: f64, note: Option<String>) -> Candidate {
@@ -223,7 +248,11 @@ impl LyricsProvider for SpicyLyrics {
                     }
                 }
             }
-            Ok(out)
+            if !self.check_results {
+                return Ok(out);
+            }
+            out.truncate(CHECKED_RESULTS);
+            self.keep_available(out).await
         })
     }
 
