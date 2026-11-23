@@ -65,7 +65,7 @@ impl Default for ScrollConfig {
         Self {
             animation: ScrollAnimation::Staggered,
             speed: 1.0,
-            lead_ms: 300,
+            lead_ms: 250,
             click_seek: ClickSeek::Lines,
         }
     }
@@ -322,7 +322,7 @@ pub struct AppearanceConfig {
 impl Default for AppearanceConfig {
     fn default() -> Self {
         Self {
-            renderer: Renderer::Cell,
+            renderer: Renderer::Pixel,
             style: VisualStyle::Spring,
             album_theming: true,
             background: Background::Gradient,
@@ -339,7 +339,7 @@ impl Default for AppearanceConfig {
             pixel_fps: 30,
             font_family: String::new(),
             font_weight: 700,
-            font_scale: 2.2,
+            font_scale: 2.0,
             glow: false,
             emphasis: true,
             syllable_spacing: SyllableSpacing::Joined,
@@ -373,7 +373,7 @@ impl Default for LyricsConfig {
             interlude_threshold_secs: 3.0,
             reserve_interlude_space: false,
             join_split_words: false,
-            resume_follow_secs: 4.0,
+            resume_follow_secs: 5.0,
         }
     }
 }
@@ -408,7 +408,7 @@ pub struct ControlsConfig {
 impl Default for ControlsConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             seek_step_secs: 5,
             remember_settings: true,
             remember_settings_secs: 30,
