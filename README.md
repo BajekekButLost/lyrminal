@@ -200,6 +200,8 @@ Without a key, Spicy Lyrics is skipped and the other providers still work.
 
 When the player doesn't give a Spotify ID, "Auto-match" decides how loose a search match Spicy Lyrics may pick on its own: `exact`, `likely`, `version`, `other artist` or `related`. A different version of a song has different timings, so `exact` (the default) is safest.
 
+Spicy Lyrics' search finds tracks, not lyrics, so some of its results in the sync picker (`s`) may have no lyrics at all. With **Check results** on (the default), Lyrminal asks for the lyrics of the first results and only lists the ones that have them; the rest aren't listed. **Results to check** sets how many, from 1 to 20 (5 by default). Each one is a request against the key's rate limit. Turn Check results off to list every result unchecked, using a single request.
+
 ### Matching other copies of a song
 
 Most providers have a **Duration tolerance**. Lyrics for another copy of a song, such as the same track in a different player or on a different album, are used when the title and artist match and the length differs by at most this many seconds (2 s by default).
