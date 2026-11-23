@@ -224,8 +224,9 @@ pub struct PixelRenderer {
 }
 
 fn push_glued(text: &mut String, syllable: &str) {
-    let core = syllable.trim();
-    let lead = &syllable[..syllable.len() - syllable.trim_start().len()];
+    let edge = |c: char| c.is_whitespace() || c == '\u{200b}';
+    let core = syllable.trim_matches(edge);
+    let lead = &syllable[..syllable.len() - syllable.trim_start_matches(edge).len()];
     let tail = &syllable[lead.len() + core.len()..];
     text.push_str(lead);
     let mut joined = String::new();
@@ -338,7 +339,7 @@ fn shape(fonts: &mut Fonts, spec: ShapeSpec) -> (Vec<PGlyph>, f32) {
                 .unwrap_or(0);
             let blank = spec.text[g.start..g.end.min(spec.text.len())]
                 .chars()
-                .all(|c| c.is_whitespace() || c == WORD_JOINER);
+                .all(|c| c.is_whitespace() || c == WORD_JOINER || c == '\u{200b}');
             glyphs.push(PGlyph {
                 glyph: g.clone(),
                 baseline: run.line_y,
@@ -1388,7 +1389,7 @@ mod tests {
     #[test]
     fn multi_word_syllables_wrap_as_one() {
         let mut renderer = PixelRenderer::new(load_fonts());
-        for middle in ["bbbb cccc", "bbbb-cccc", "bbbb/cccc", "bb-bb cc-cc", "bbbb\u{200b}cccc"] {
+        for middle in ["bbbb cccc", "bbbb-cccc", "bbbb/cccc", "bb-bb cc-cc", "bbbb\u{200b}cccc", "\u{200b}bbbb cccc", "bbbb cccc\u{200b}"] {
             let group = VocalGroup {
                 syllables: ["aaaa", middle, "dddd"]
                     .iter()
