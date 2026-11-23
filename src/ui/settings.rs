@@ -212,7 +212,7 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
             item(
                 "Results to check",
-                "How many search results Check results asks lyrics for. Each one is a request against your key's limit of 60 a minute, and the rest are not listed.",
+                "How many search results Check results asks lyrics for. Each one is a request against the rate limit of the key in use, whether that's the shared built-in key or your own, and the rest are not listed.",
                 Kind::Number {
                     min: *SPICY_CHECKED_RESULTS.start() as f64,
                     max: *SPICY_CHECKED_RESULTS.end() as f64,
