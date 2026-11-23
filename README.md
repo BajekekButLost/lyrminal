@@ -137,7 +137,7 @@ In-app updates need a prebuilt binary for your system (Linux x86_64) and write a
 3. On the first launch, a short welcome tour docks next to the lyrics and walks you through:
    - what your terminal can show, when it has no kitty graphics (with a warning if tmux, screen or missing truecolor is in the way),
    - choosing a player,
-   - ordering the lyrics providers and adding a Spicy Lyrics key,
+   - ordering the lyrics providers and, optionally, adding your own Spicy Lyrics key,
    - picking a folder for your own syncs,
    - playing a song,
    - changing the look live,
@@ -183,20 +183,20 @@ Reorder providers, turn them on or off, and change their options in Settings →
 | # | Provider | Key needed | How it looks songs up |
 | --- | --- | --- | --- |
 | 1 | Local library | No | Your own saved syncs, matched by title, artist and length |
-| 2 | [Spicy Lyrics](https://spicylyrics.org) | Yes, free | By Spotify ID when the player exposes one, otherwise by search |
+| 2 | [Spicy Lyrics](https://spicylyrics.org) | Optional | By Spotify ID when the player exposes one, otherwise by search |
 | 3 | [lrc.red](https://lrc.red) | No | By ISRC when the player exposes one, otherwise by title and artist |
 | 4 | [Better Lyrics (Unison)](https://unison.betterlyrics.org) | No | By searching title and artist |
 | 5 | [lrcmux](https://lrcmux.dev) | No | By title, artist, album and length; gathers syncs from Deezer, KuGou and YouTube Music |
 | 6 | [LRCLIB](https://lrclib.net) | No | By title, artist, album and length, then a search |
 
-### Spicy Lyrics API key
+### Spicy Lyrics
 
-Spicy Lyrics returns community syncs first, then Apple Music and Spotify syncs. It needs a secret key:
+Spicy Lyrics returns community syncs first, then Apple Music and Spotify syncs. It works out of the box with Lyrminal's built-in key, which everyone shares.
 
-1. Create one at [developers.spicylyrics.org](https://developers.spicylyrics.org) → Dashboard → Applications.
-2. Paste it into Settings → Providers → Spicy Lyrics → API key, or set the `SPICY_LYRICS_SECRET_KEY` environment variable, which takes precedence.
+**Your own key (optional):** a key of your own gets a rate limit of its own.
 
-Without a key, Spicy Lyrics is skipped and the other providers still work.
+1. Create a secret key at [developers.spicylyrics.org](https://developers.spicylyrics.org) → Dashboard → Applications.
+2. Paste it into Settings → Providers → Spicy Lyrics → API key. Entering a key turns on "Use your own key"; turn that off to go back to the built-in key. Or set the `SPICY_LYRICS_SECRET_KEY` environment variable, which takes precedence even when "Use your own key" is off.
 
 When the player doesn't give a Spotify ID, "Auto-match" decides how loose a search match Spicy Lyrics may pick on its own: `exact`, `likely`, `version`, `other artist` or `related`. A different version of a song has different timings, so `exact` (the default) is safest.
 
@@ -323,7 +323,7 @@ Press `p` to pick from the players that are running right now.
 
 | Path | What's in it |
 | --- | --- |
-| `~/.config/lyrminal/config.json` | Settings, including the Spicy Lyrics API key |
+| `~/.config/lyrminal/config.json` | Settings, including your Spicy Lyrics API key if you set one |
 | `~/.local/state/lyrminal/state.json` | Per-track offsets, chosen syncs and the welcome tour status |
 | `~/.cache/lyrminal/` | Cached lyrics and lookups |
 | `~/.local/share/lyrminal/library/` | Your saved syncs: an `index.json` plus a copy of each file in its original format |
@@ -352,7 +352,7 @@ The paths follow your `XDG_*` directories when those are set. With `--base-direc
 **No lyrics are found**
 
 - Check that at least one provider is enabled in Settings → Providers.
-- Spicy Lyrics is skipped until it has an API key.
+- If Spicy Lyrics says it is rate limited, wait a minute or add your own key in Settings → Providers → Spicy Lyrics.
 - Press `R` to try again without the cache, or `s` to search all providers.
 - You can always add your own sync with `L`.
 
