@@ -1,7 +1,8 @@
 use futures::future::{BoxFuture, join_all};
 use serde::Deserialize;
 
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use super::{Candidate, LyricsProvider, ProviderError, ProviderResult, RateGate, TrackQuery, gate_for, retry_after};
@@ -17,6 +18,7 @@ pub struct SpicyLyrics {
     key: String,
     min_tier: MatchTier,
     check_results: Option<usize>,
+    checked: Mutex<HashMap<String, Lyrics>>,
     gate: Arc<RateGate>,
 }
 
@@ -27,8 +29,13 @@ impl SpicyLyrics {
             key,
             min_tier,
             check_results,
+            checked: Mutex::new(HashMap::new()),
             gate: gate_for(ID, Duration::from_millis(250)),
         }
+    }
+
+    fn checked(&self) -> std::sync::MutexGuard<'_, HashMap<String, Lyrics>> {
+        self.checked.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     async fn get_json(&self, url: &str, query: &[(&str, String)]) -> ProviderResult<serde_json::Value> {
@@ -92,11 +99,13 @@ impl SpicyLyrics {
     async fn keep_available(&self, candidates: Vec<Candidate>) -> ProviderResult<Vec<Candidate>> {
         let probes = join_all(candidates.iter().map(|c| self.lyrics_by_id(&c.id))).await;
         let mut kept = Vec::new();
+        let mut found = HashMap::new();
         let mut failure = None;
         for (mut c, probe) in candidates.into_iter().zip(probes) {
             match probe {
                 Ok(lyrics) => {
                     c.kind_hint = Some(lyrics.kind);
+                    found.insert(c.id.clone(), lyrics);
                     kept.push(c);
                 }
                 Err(ProviderError::NotFound) => {}
@@ -105,6 +114,7 @@ impl SpicyLyrics {
                 }
             }
         }
+        *self.checked() = found;
         match failure {
             Some(e) if kept.is_empty() => Err(e),
             _ => Ok(kept),
@@ -243,7 +253,13 @@ impl LyricsProvider for SpicyLyrics {
     }
 
     fn fetch<'a>(&'a self, c: &'a Candidate) -> BoxFuture<'a, ProviderResult<Lyrics>> {
-        Box::pin(async move { self.lyrics_by_id(&c.id).await })
+        Box::pin(async move {
+            let checked = self.checked().remove(&c.id);
+            match checked {
+                Some(lyrics) => Ok(lyrics),
+                None => self.lyrics_by_id(&c.id).await,
+            }
+        })
     }
 }
 
@@ -521,6 +537,27 @@ fn convert(body: Body) -> ProviderResult<Lyrics> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn fetch_reuses_checked_lyrics_once() {
+        let p = SpicyLyrics::new(reqwest::Client::new(), String::new(), MatchTier::Exact, Some(5));
+        let body: Body = serde_json::from_value(serde_json::json!({"Type": "Static", "Lines": [{"Text": "a"}], "source": "spotify"})).unwrap();
+        p.checked().insert("x".into(), convert(body).unwrap());
+        let c = Candidate {
+            provider: ID.into(),
+            id: "x".into(),
+            title: "t".into(),
+            artists: vec![],
+            album: None,
+            duration: None,
+            tier: None,
+            kind_hint: None,
+            note: None,
+        };
+        let l = p.fetch(&c).await.unwrap();
+        assert_eq!(l.lines[0].lead.text(), "a");
+        assert!(p.checked().is_empty());
+    }
 
     #[test]
     fn converts_syllable_body() {
