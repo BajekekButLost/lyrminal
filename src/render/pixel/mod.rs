@@ -237,6 +237,7 @@ fn push_glued(text: &mut String, syllable: &str) {
         joined.push('\u{a0}');
         joined.push_str(w);
     }
+    let joined = joined.replace('\u{200b}', &WORD_JOINER.to_string());
     let mut last = 0;
     for (at, _) in unicode_linebreak::linebreaks(&joined) {
         if at == 0 || at >= joined.len() {
@@ -1387,7 +1388,7 @@ mod tests {
     #[test]
     fn multi_word_syllables_wrap_as_one() {
         let mut renderer = PixelRenderer::new(load_fonts());
-        for middle in ["bbbb cccc", "bbbb-cccc", "bbbb/cccc", "bb-bb cc-cc"] {
+        for middle in ["bbbb cccc", "bbbb-cccc", "bbbb/cccc", "bb-bb cc-cc", "bbbb\u{200b}cccc"] {
             let group = VocalGroup {
                 syllables: ["aaaa", middle, "dddd"]
                     .iter()
@@ -1411,7 +1412,7 @@ mod tests {
             assert_eq!(rows(&mut renderer, SyncKind::Line).0, 2, "{middle}");
             let (count, letters) = rows(&mut renderer, SyncKind::Syllable);
             assert_eq!(count, 1, "{middle}");
-            assert_eq!(letters, middle.chars().filter(|c| !c.is_whitespace()).count(), "{middle}");
+            assert_eq!(letters, middle.chars().filter(|c| !c.is_whitespace() && *c != '\u{200b}').count(), "{middle}");
         }
     }
 
