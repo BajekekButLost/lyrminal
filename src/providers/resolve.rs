@@ -1,3 +1,5 @@
+use std::sync::Mutex;
+
 use futures::StreamExt;
 use futures::stream::FuturesOrdered;
 
@@ -73,11 +75,14 @@ pub async fn resolve(
         }
     }
     let key = q.key();
+    let limits: Mutex<Vec<RateLimit>> = Mutex::new(Vec::new());
+    let take_limits = || std::mem::take(&mut *limits.lock().unwrap_or_else(|e| e.into_inner()));
     let mut lookups: FuturesOrdered<_> = registry
         .providers
         .iter()
         .map(|p| {
             let key = &key;
+            let limits = &limits;
             async move {
                 if let Err(reason) = p.ready() {
                     return (p.name(), Err(reason));
@@ -88,8 +93,10 @@ pub async fn resolve(
                     Some(hit) => Ok(hit),
                     None => {
                         let r = p.lookup(q).await;
-                        if cacheable && let Ok(v) = &r {
-                            cache.put_lookup(p.id(), key, v);
+                        match &r {
+                            Ok(v) if cacheable => cache.put_lookup(p.id(), key, v),
+                            Err(e) => limits.lock().unwrap_or_else(|e| e.into_inner()).extend(e.rate_limit(p.name())),
+                            Ok(_) => {}
                         }
                         r
                     }
@@ -127,6 +134,7 @@ pub async fn resolve(
                 };
                 if !registry.prefer_synced {
                     out.result = Some(res);
+                    out.rate_limits.extend(take_limits());
                     return out;
                 }
                 let trusted = trusted_local(registry, &res.candidate);
@@ -141,16 +149,14 @@ pub async fn resolve(
                 provider: name.into(),
                 outcome: "no match".into(),
             }),
-            Err(e) => {
-                out.rate_limits.extend(e.rate_limit(name));
-                out.attempts.push(Attempt {
-                    provider: name.into(),
-                    outcome: e.to_string(),
-                });
-            }
+            Err(e) => out.attempts.push(Attempt {
+                provider: name.into(),
+                outcome: e.to_string(),
+            }),
         }
     }
     out.result = best;
+    out.rate_limits.extend(take_limits());
     out
 }
 
@@ -178,6 +184,7 @@ mod tests {
         kind: Option<SyncKind>,
         tier: MatchTier,
         delay: Duration,
+        limited: bool,
     }
 
     impl LyricsProvider for Mock {
@@ -196,6 +203,9 @@ mod tests {
         fn lookup<'a>(&'a self, _q: &'a TrackQuery) -> BoxFuture<'a, ProviderResult<Option<(Candidate, Lyrics)>>> {
             Box::pin(async move {
                 tokio::time::sleep(self.delay).await;
+                if self.limited {
+                    return Err(ProviderError::RateLimited(Some(9)));
+                }
                 Ok(self.kind.map(|kind| {
                     let c = Candidate {
                         provider: self.id.into(),
@@ -242,10 +252,30 @@ mod tests {
     }
 
     fn mock_with(id: &'static str, kind: Option<SyncKind>, tier: MatchTier, delay: Duration) -> Arc<Mock> {
-        Arc::new(Mock { id, kind, tier, delay })
+        Arc::new(Mock {
+            id,
+            kind,
+            tier,
+            delay,
+            limited: false,
+        })
+    }
+
+    fn mock_limited(id: &'static str) -> Arc<Mock> {
+        Arc::new(Mock {
+            id,
+            kind: None,
+            tier: MatchTier::Exact,
+            delay: Duration::ZERO,
+            limited: true,
+        })
     }
 
     async fn pick(providers: &[Arc<Mock>], prefer_synced: bool, prioritize_local: bool) -> Option<String> {
+        run(providers, prefer_synced, prioritize_local).await.result.map(|r| r.candidate.provider)
+    }
+
+    async fn run(providers: &[Arc<Mock>], prefer_synced: bool, prioritize_local: bool) -> Outcome {
         let registry = Registry {
             providers: providers.iter().map(|p| p.clone() as Arc<dyn LyricsProvider>).collect(),
             prefer_synced,
@@ -257,10 +287,19 @@ mod tests {
             artists: vec!["Artist".into()],
             ..Default::default()
         };
-        resolve(&registry, &cache, &q, None, true)
-            .await
-            .result
-            .map(|r| r.candidate.provider)
+        resolve(&registry, &cache, &q, None, true).await
+    }
+
+    #[tokio::test]
+    async fn records_rate_limits_that_finish_before_the_winner() {
+        let ps = [mock_slow("a", Some(SyncKind::Syllable), 100), mock_limited("b"), mock_slow("c", Some(SyncKind::Line), 5000)];
+        let started = Instant::now();
+        let out = run(&ps, true, true).await;
+        assert_eq!(out.result.map(|r| r.candidate.provider).as_deref(), Some("a"));
+        assert_eq!(out.rate_limits, vec![RateLimit { provider: "b".into(), retry: Some(9) }]);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        let out = run(&[mock_limited("b"), mock("a", Some(SyncKind::Line))], false, true).await;
+        assert_eq!(out.rate_limits.len(), 1);
     }
 
     #[tokio::test]
