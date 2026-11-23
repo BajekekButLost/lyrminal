@@ -191,10 +191,23 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
             item(
                 "Check results",
-                "Spicy Lyrics' search finds tracks, not lyrics. On: the sync picker asks for the lyrics of the first 5 results and only lists those that have them. Off: lists every result, even ones without lyrics, at the cost of one request instead of up to 6.",
+                "Spicy Lyrics' search finds tracks, not lyrics. On: the sync picker asks for the lyrics of the first results (see Results to check) and only lists those that have them. Off: lists every result, even ones without lyrics, using a single request.",
                 Kind::Toggle {
                     get: |c| c.providers.spicy_lyrics.check_results,
                     set: |c, v| c.providers.spicy_lyrics.check_results = v,
+                },
+            ),
+            item(
+                "Results to check",
+                "How many search results Check results asks lyrics for. Each one is a request against your key's limit of 60 a minute, and the rest are not listed.",
+                Kind::Number {
+                    min: 1.0,
+                    max: 20.0,
+                    step: 1.0,
+                    decimals: 0,
+                    unit: "",
+                    get: |c| c.providers.spicy_lyrics.checked_results as f64,
+                    set: |c, v| c.providers.spicy_lyrics.checked_results = v as u32,
                 },
             ),
             item(

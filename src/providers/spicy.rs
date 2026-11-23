@@ -11,18 +11,17 @@ use crate::lyrics::{Contributor, Credits, LyricLine, Lyrics, Syllable, SyncKind,
 pub const ID: &str = "spicy-lyrics";
 pub const NAME: &str = "Spicy Lyrics";
 const BASE: &str = "https://api.spicylyrics.org";
-const CHECKED_RESULTS: usize = 5;
 
 pub struct SpicyLyrics {
     client: reqwest::Client,
     key: Option<String>,
     min_tier: MatchTier,
-    check_results: bool,
+    check_results: Option<usize>,
     gate: Arc<RateGate>,
 }
 
 impl SpicyLyrics {
-    pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier, check_results: bool) -> Self {
+    pub fn new(client: reqwest::Client, key: Option<String>, min_tier: MatchTier, check_results: Option<usize>) -> Self {
         Self {
             client,
             key,
@@ -248,10 +247,10 @@ impl LyricsProvider for SpicyLyrics {
                     }
                 }
             }
-            if !self.check_results {
+            let Some(limit) = self.check_results else {
                 return Ok(out);
-            }
-            out.truncate(CHECKED_RESULTS);
+            };
+            out.truncate(limit.max(1));
             self.keep_available(out).await
         })
     }

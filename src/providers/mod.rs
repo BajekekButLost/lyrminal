@@ -338,7 +338,7 @@ impl Registry {
                     client.clone(),
                     config.providers.spicy_lyrics.effective_key(),
                     config.providers.spicy_lyrics.min_tier,
-                    config.providers.spicy_lyrics.check_results,
+                    config.providers.spicy_lyrics.check_results.then_some(config.providers.spicy_lyrics.checked_results as usize),
                 ))),
                 lrcred::ID => providers.push(Arc::new(lrcred::LrcRed::new(
                     client.clone(),

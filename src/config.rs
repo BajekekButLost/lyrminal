@@ -227,6 +227,7 @@ pub struct SpicyConfig {
     pub api_key: String,
     pub min_tier: MatchTier,
     pub check_results: bool,
+    pub checked_results: u32,
 }
 
 impl Default for SpicyConfig {
@@ -235,6 +236,7 @@ impl Default for SpicyConfig {
             api_key: String::new(),
             min_tier: MatchTier::Exact,
             check_results: true,
+            checked_results: 5,
         }
     }
 }
