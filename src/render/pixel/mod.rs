@@ -228,16 +228,29 @@ fn push_glued(text: &mut String, syllable: &str) {
     let lead = &syllable[..syllable.len() - syllable.trim_start().len()];
     let tail = &syllable[lead.len() + core.len()..];
     text.push_str(lead);
+    let mut joined = String::new();
     let mut words = core.split_whitespace();
     if let Some(first) = words.next() {
-        text.push_str(first);
+        joined.push_str(first);
     }
     for w in words {
-        text.push('\u{a0}');
-        text.push_str(w);
+        joined.push('\u{a0}');
+        joined.push_str(w);
     }
+    let mut last = 0;
+    for (at, _) in unicode_linebreak::linebreaks(&joined) {
+        if at == 0 || at >= joined.len() {
+            continue;
+        }
+        text.push_str(&joined[last..at]);
+        text.push(WORD_JOINER);
+        last = at;
+    }
+    text.push_str(&joined[last..]);
     text.push_str(tail);
 }
+
+const WORD_JOINER: char = '\u{2060}';
 
 fn group_text(group: &VocalGroup, roman: bool, glue: bool) -> (String, Vec<Range<usize>>) {
     let mut text = String::new();
@@ -322,7 +335,9 @@ fn shape(fonts: &mut Fonts, spec: ShapeSpec) -> (Vec<PGlyph>, f32) {
                 .position(|r| g.start >= r.start && g.start < r.end)
                 .or_else(|| spec.ranges.iter().rposition(|r| r.start <= g.start))
                 .unwrap_or(0);
-            let blank = spec.text[g.start..g.end.min(spec.text.len())].chars().all(char::is_whitespace);
+            let blank = spec.text[g.start..g.end.min(spec.text.len())]
+                .chars()
+                .all(|c| c.is_whitespace() || c == WORD_JOINER);
             glyphs.push(PGlyph {
                 glyph: g.clone(),
                 baseline: run.line_y,
@@ -1372,28 +1387,32 @@ mod tests {
     #[test]
     fn multi_word_syllables_wrap_as_one() {
         let mut renderer = PixelRenderer::new(load_fonts());
-        let group = VocalGroup {
-            syllables: ["aaaa", "bbbb cccc", "dddd"]
-                .iter()
-                .map(|t| Syllable {
-                    text: t.to_string(),
-                    start: 0.0,
-                    end: 1.0,
-                    part_of_word: false,
-                    roman: None,
-                    roman_part_of_word: false,
-                })
-                .collect(),
-            ..Default::default()
-        };
-        let rows = |renderer: &mut PixelRenderer, sync: SyncKind| {
-            let part = renderer.build_part(PartKind::Lead, &group, sync, false, 44.0, 300.0, 0.0, Align::Left, "", 700);
-            let mut rows: Vec<f32> = part.glyphs.iter().filter(|g| !g.blank && g.syl == 1).map(|g| g.baseline).collect();
-            rows.dedup();
-            rows.len()
-        };
-        assert_eq!(rows(&mut renderer, SyncKind::Line), 2);
-        assert_eq!(rows(&mut renderer, SyncKind::Syllable), 1);
+        for middle in ["bbbb cccc", "bbbb-cccc", "bbbb/cccc", "bb-bb cc-cc"] {
+            let group = VocalGroup {
+                syllables: ["aaaa", middle, "dddd"]
+                    .iter()
+                    .map(|t| Syllable {
+                        text: t.to_string(),
+                        start: 0.0,
+                        end: 1.0,
+                        part_of_word: false,
+                        roman: None,
+                        roman_part_of_word: false,
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            let rows = |renderer: &mut PixelRenderer, sync: SyncKind| {
+                let part = renderer.build_part(PartKind::Lead, &group, sync, false, 44.0, 300.0, 0.0, Align::Left, "", 700);
+                let mut rows: Vec<f32> = part.glyphs.iter().filter(|g| !g.blank && g.syl == 1).map(|g| g.baseline).collect();
+                rows.dedup();
+                (rows.len(), part.syl_letters[1])
+            };
+            assert_eq!(rows(&mut renderer, SyncKind::Line).0, 2, "{middle}");
+            let (count, letters) = rows(&mut renderer, SyncKind::Syllable);
+            assert_eq!(count, 1, "{middle}");
+            assert_eq!(letters, middle.chars().filter(|c| !c.is_whitespace()).count(), "{middle}");
+        }
     }
 
     #[test]
