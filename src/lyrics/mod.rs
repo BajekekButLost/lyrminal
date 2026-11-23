@@ -222,8 +222,73 @@ impl Lyrics {
         }
         self.lines.retain(|l| !l.lead.syllables.is_empty());
         if timed {
-            self.lines
-                .sort_by(|a, b| a.start.partial_cmp(&b.start).unwrap_or(std::cmp::Ordering::Equal));
+            self.place_out_of_sequence_lines();
         }
+    }
+
+    fn place_out_of_sequence_lines(&mut self) {
+        for i in 1..self.lines.len() {
+            let prev_start = self.lines[i - 1].start;
+            let prev_end = self.lines[i - 1].full_end();
+            let line = &mut self.lines[i];
+            if line.start < prev_start && line.full_end() <= prev_start {
+                line.shift(prev_end - line.start);
+            }
+        }
+    }
+}
+
+impl LyricLine {
+    fn shift(&mut self, by: f64) {
+        self.start += by;
+        self.end += by;
+        for g in std::iter::once(&mut self.lead).chain(self.background.iter_mut()) {
+            g.start += by;
+            g.end += by;
+            for s in &mut g.syllables {
+                s.start += by;
+                s.end += by;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(start: f64, end: f64, text: &str) -> LyricLine {
+        LyricLine {
+            start,
+            end,
+            opposite: false,
+            lead: VocalGroup::single(text.into(), start, end),
+            background: vec![],
+            background_only: false,
+        }
+    }
+
+    #[test]
+    fn keeps_the_order_of_the_sync() {
+        let mut l = Lyrics {
+            kind: SyncKind::Syllable,
+            lines: vec![
+                line(5.0, 7.0, "a"),
+                line(6.5, 9.0, "b"),
+                line(10.0, 12.0, "c"),
+                line(0.0, 0.0, "d"),
+                line(0.0, 0.0, "e"),
+            ],
+            credits: Credits::default(),
+            language: None,
+            instrumental: false,
+        };
+        l.sort();
+        let texts: Vec<String> = l.lines.iter().map(|l| l.lead.text()).collect();
+        assert_eq!(texts, ["a", "b", "c", "d", "e"]);
+        assert_eq!((l.lines[1].start, l.lines[1].end), (6.5, 9.0));
+        assert_eq!((l.lines[3].start, l.lines[3].end), (12.0, 12.0));
+        assert_eq!(l.lines[3].lead.syllables[0].start, 12.0);
+        assert_eq!((l.lines[4].start, l.lines[4].end), (12.0, 12.0));
     }
 }

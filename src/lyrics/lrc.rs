@@ -24,6 +24,7 @@ struct RawLine {
 pub fn parse(input: &str, credits: Credits, duration: Option<f64>) -> Option<Lyrics> {
     let mut offset = 0.0;
     let mut raw: Vec<RawLine> = Vec::new();
+    let mut repeated = false;
     for line in input.lines() {
         let mut rest = line.trim_end_matches('\r');
         let mut times = Vec::new();
@@ -41,6 +42,7 @@ pub fn parse(input: &str, credits: Credits, duration: Option<f64>) -> Option<Lyr
             continue;
         }
         let (words, text) = parse_enhanced(rest);
+        repeated |= times.len() > 1;
         for t in times {
             raw.push(RawLine {
                 time: t,
@@ -52,7 +54,9 @@ pub fn parse(input: &str, credits: Credits, duration: Option<f64>) -> Option<Lyr
     if raw.is_empty() {
         return None;
     }
-    raw.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    if repeated {
+        raw.sort_by(|a, b| a.time.partial_cmp(&b.time).unwrap_or(std::cmp::Ordering::Equal));
+    }
     let has_words = raw.iter().any(|r| r.words.len() > 1);
     let mut lines = Vec::new();
     for i in 0..raw.len() {
@@ -61,7 +65,10 @@ pub fn parse(input: &str, credits: Credits, duration: Option<f64>) -> Option<Lyr
             continue;
         }
         let start = (r.time - offset).max(0.0);
-        let next = raw.get(i + 1).map(|n| (n.time - offset).max(start));
+        let next = raw
+            .get(i + 1)
+            .filter(|n| n.time >= r.time)
+            .map(|n| (n.time - offset).max(start));
         let end = next.unwrap_or_else(|| {
             let fallback = start + 5.0;
             duration.map(|d| d.min(fallback).max(start + 0.5)).unwrap_or(fallback)
@@ -176,6 +183,18 @@ mod tests {
         assert_eq!(l.lines.len(), 2);
         assert!((l.lines[0].end - 3.5).abs() < 1e-9);
         assert!((l.lines[1].end - 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn keeps_file_order_and_sorts_repeated_lines() {
+        let src = "[00:02.00]alpha\n[00:04.00]beta\n[00:00.00]gamma\n";
+        let l = parse(src, Credits::default(), Some(10.0)).unwrap();
+        assert_eq!(l.lines[2].lead.text(), "gamma");
+        assert!((l.lines[1].end - 9.0).abs() < 1e-9);
+        let src = "[00:01.00][00:05.00]chorus\n[00:03.00]verse\n";
+        let l = parse(src, Credits::default(), None).unwrap();
+        let texts: Vec<String> = l.lines.iter().map(|l| l.lead.text()).collect();
+        assert_eq!(texts, ["chorus", "verse", "chorus"]);
     }
 
     #[test]
