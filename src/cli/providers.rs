@@ -15,6 +15,14 @@ pub struct ProvidersArgs {
 pub enum ProvidersCommand {
     #[command(about = "List the providers in priority order and whether they are on")]
     List(ListArgs),
+    #[command(about = "Turn providers on; ids can also come from stdin")]
+    Enable(IdsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct IdsArgs {
+    #[arg(help = "Provider ids or names; leave them out or use - to read them from stdin, one per line")]
+    pub providers: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -91,9 +99,27 @@ fn list(args: ListArgs) -> i32 {
     0
 }
 
+fn providers(args: IdsArgs) -> Vec<&'static ProviderInfo> {
+    super::read_list(args.providers, "provider").iter().map(|p| provider(p)).collect()
+}
+
+fn set_enabled(args: IdsArgs, on: bool) -> i32 {
+    let list = providers(args);
+    let mut cfg = super::load_config();
+    for p in &list {
+        cfg.providers.set_enabled(p.id, on);
+    }
+    super::save_config(&cfg);
+    for p in &list {
+        println!("{} = {}", p.id, if on { "on" } else { "off" });
+    }
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
+        ProvidersCommand::Enable(a) => set_enabled(a, true),
     }
 }
 
