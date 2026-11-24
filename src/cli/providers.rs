@@ -29,6 +29,16 @@ pub enum ProvidersCommand {
     Get(GetArgs),
     #[command(about = "Change one of a provider's options; the value can also come from stdin")]
     Set(SetArgs),
+    #[command(about = "Put providers back to their default options, position and on/off; ids can also come from stdin")]
+    Reset(ResetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ResetArgs {
+    #[arg(help = "Provider ids or names; leave them out or use - to read them from stdin, one per line")]
+    pub providers: Vec<String>,
+    #[arg(long, conflicts_with = "providers", help = "Reset every provider setting, including the order and Prefer synced lyrics")]
+    pub all: bool,
 }
 
 #[derive(Args, Debug)]
@@ -294,6 +304,34 @@ fn set(args: SetArgs) -> i32 {
     0
 }
 
+pub fn reset_provider(cfg: &mut Config, p: &ProviderInfo) {
+    for s in options_of(p) {
+        setting_keys::reset(cfg, &s.item);
+    }
+    let mut ids = ordered_ids(cfg);
+    let want = ordered_ids(&Config::default()).iter().position(|id| id == p.id);
+    if let (Some(want), Some(have)) = (want, ids.iter().position(|id| id == p.id)) {
+        let id = ids.remove(have);
+        ids.insert(want.min(ids.len()), id);
+        cfg.providers.order = ids;
+    }
+}
+
+fn reset(args: ResetArgs) -> i32 {
+    let mut cfg = super::load_config();
+    if args.all {
+        cfg.providers = Config::default().providers;
+    } else {
+        let names = super::read_list(args.providers, "provider");
+        for name in &names {
+            reset_provider(&mut cfg, provider(name));
+        }
+    }
+    super::save_config(&cfg);
+    print_order(&cfg, false);
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
@@ -304,6 +342,7 @@ pub fn run(args: ProvidersArgs) -> i32 {
         ProvidersCommand::Options(a) => options(a),
         ProvidersCommand::Get(a) => get(a),
         ProvidersCommand::Set(a) => set(a),
+        ProvidersCommand::Reset(a) => reset(a),
     }
 }
 
@@ -345,5 +384,21 @@ mod tests {
         assert_eq!(ordered_ids(&cfg), vec!["local-library", "lrclib", "spicy-lyrics", "unison", "lrcmux", "lrc-red"]);
         assert!(order_from(&["lrclib".into(), "LRCLIB".into()]).is_err());
         assert!(order_from(&[]).is_err());
+    }
+
+    #[test]
+    fn resets_one_provider_completely() {
+        let mut cfg = Config::default();
+        let lrclib = resolve("lrclib").unwrap();
+        cfg.providers.order = order_from(&["lrclib".into()]).unwrap();
+        cfg.providers.set_enabled("lrclib", false);
+        cfg.providers.lrclib.duration_tolerance_secs = 7.0;
+        cfg.providers.lrc_red.duration_tolerance_secs = 7.0;
+        reset_provider(&mut cfg, lrclib);
+        assert_eq!(ordered_ids(&cfg), ordered_ids(&Config::default()));
+        assert!(cfg.providers.is_enabled("lrclib"));
+        assert_eq!(cfg.providers.lrclib.duration_tolerance_secs, 2.0);
+        assert_eq!(cfg.providers.lrc_red.duration_tolerance_secs, 7.0);
+        assert_eq!(option_name(lrclib, &find_option(lrclib, "duration-tolerance-secs").unwrap()), "durationToleranceSecs");
     }
 }
