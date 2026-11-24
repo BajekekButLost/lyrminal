@@ -1,5 +1,6 @@
 mod anim;
 mod app;
+mod cli;
 mod config;
 mod library;
 mod lyrics;
@@ -16,6 +17,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use clap::{CommandFactory, Parser};
 use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, EventStream};
 use crossterm::execute;
 use futures::StreamExt;
@@ -28,95 +30,36 @@ use crate::ui::draw::{self, Graphics};
 
 const IDLE_FRAME: Duration = Duration::from_millis(250);
 
-fn usage() {
-    println!(
-        "Lyrminal v{} — synced lyrics in your terminal\n\n\
-         Usage: lyrminal [options]\n\n\
-         Options:\n  \
-           -h, --help                    Show this help\n  \
-           -V, --version                 Show the version\n  \
-           --base-directory <dir>        Use <dir> as the home folder for Lyrminal's files\n                                \
-         ($BASE/.config/lyrminal, $BASE/.cache/lyrminal, ...); created if missing\n  \
-           --temp-base-directory         Same, in a new randomly named temporary folder\n\n\
-         Everything else is configured inside the app (press Esc).\n\
-         Config: {}",
-        env!("CARGO_PKG_VERSION"),
-        Config::path().display()
-    );
-}
-
-enum Base {
-    Home,
-    Dir(String),
-    Temp,
-}
-
-fn fail(msg: &str) -> ! {
-    eprintln!("lyrminal: {msg}");
-    eprintln!("Run lyrminal --help for the options.");
-    std::process::exit(2);
-}
-
-enum Info {
-    Help,
-    Version,
-}
-
-fn parse_args() -> (Base, Option<Info>) {
-    let mut base = Base::Home;
-    let mut info = None;
-    let set = |b: Base, base: &mut Base| {
-        if !matches!(base, Base::Home) {
-            fail("use only one of --base-directory and --temp-base-directory");
-        }
-        *base = b;
-    };
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => info = Some(Info::Help),
-            "-V" | "--version" => info = info.or(Some(Info::Version)),
-            "--temp-base-directory" => set(Base::Temp, &mut base),
-            "--base-directory" => match args.next() {
-                Some(dir) if !dir.trim().is_empty() => set(Base::Dir(dir), &mut base),
-                _ => fail("--base-directory needs a folder"),
-            },
-            other => match other.strip_prefix("--base-directory=") {
-                Some(dir) if !dir.trim().is_empty() => set(Base::Dir(dir.to_string()), &mut base),
-                Some(_) => fail("--base-directory needs a folder"),
-                None => fail(&format!("unknown argument: {other}")),
-            },
-        }
+fn setup_base(global: &cli::GlobalArgs) {
+    if global.base_directory.is_some() && global.temp_base_directory {
+        let _ = cli::Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "use only one of --base-directory and --temp-base-directory",
+            )
+            .exit();
     }
-    (base, info)
+    let base = match (&global.base_directory, global.temp_base_directory) {
+        (Some(dir), _) => Some(config::prepare_base_dir(&library::expand_path(dir))),
+        (None, true) => Some(config::create_temp_base_dir()),
+        (None, false) => None,
+    };
+    match base {
+        Some(Ok(dir)) => config::set_base_dir(dir),
+        Some(Err(e)) => cli::fail(format!("{e:#}")),
+        None => {}
+    }
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (parsed, info) = parse_args();
-    if let Some(Info::Version) = info {
-        println!("lyrminal {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
+    let args = cli::Cli::parse();
+    setup_base(&args.global);
+    if let Some(command) = args.command {
+        let code = cli::run(command).await;
+        std::process::exit(code);
     }
-    let temp = matches!(parsed, Base::Temp);
-    let base = match parsed {
-        Base::Home => None,
-        Base::Dir(dir) => Some(config::prepare_base_dir(&library::expand_path(&dir))),
-        Base::Temp if info.is_some() => None,
-        Base::Temp => Some(config::create_temp_base_dir()),
-    };
-    match base {
-        Some(Ok(dir)) => config::set_base_dir(dir),
-        Some(Err(e)) => {
-            eprintln!("lyrminal: {e:#}");
-            std::process::exit(1);
-        }
-        None => {}
-    }
-    if info.is_some() {
-        usage();
-        return Ok(());
-    }
+    let temp = args.global.temp_base_directory;
 
     let fresh = !Config::path().exists();
     let cfg = match Config::load() {
