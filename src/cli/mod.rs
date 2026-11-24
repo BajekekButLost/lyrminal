@@ -42,6 +42,8 @@ pub struct GlobalArgs {
     pub cache_dir: Option<String>,
     #[arg(long, global = true, value_name = "DIR", value_parser = non_empty, help = "Use DIR as the local library (index.json and the saved syncs)")]
     pub library_dir: Option<String>,
+    #[arg(long, global = true, value_name = "FILE", value_parser = non_empty, help = "Socket the running app listens on, used by now-playing and to tell the app about changes")]
+    pub socket: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

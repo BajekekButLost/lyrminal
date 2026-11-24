@@ -16,6 +16,7 @@ pub enum Which {
     State,
     Cache,
     Library,
+    Socket,
 }
 
 fn path(which: Which) -> PathBuf {
@@ -24,6 +25,7 @@ fn path(which: Which) -> PathBuf {
         Which::State => config::state_file(),
         Which::Cache => config::cache_dir(),
         Which::Library => config::library_dir(),
+        Which::Socket => config::socket_path(),
     }
 }
 

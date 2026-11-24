@@ -64,6 +64,9 @@ fn setup_base(global: &cli::GlobalArgs) {
     if let Some(dir) = &global.library_dir {
         config::set_library_dir(dir_arg("--library-dir", dir));
     }
+    if let Some(file) = &global.socket {
+        config::set_socket(file_arg("--socket", file));
+    }
 }
 
 fn dir_arg(flag: &str, value: &str) -> std::path::PathBuf {

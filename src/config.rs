@@ -517,6 +517,7 @@ static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
 static STATE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static LIBRARY_DIR: OnceLock<PathBuf> = OnceLock::new();
+static SOCKET: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
@@ -550,7 +551,14 @@ pub fn library_dir() -> PathBuf {
     LIBRARY_DIR.get().cloned().unwrap_or_else(|| data_dir().join("library"))
 }
 
+pub fn set_socket(path: PathBuf) {
+    let _ = SOCKET.set(path);
+}
+
 pub fn socket_path() -> PathBuf {
+    if let Some(path) = SOCKET.get() {
+        return path.clone();
+    }
     match (base_dir(), dirs::runtime_dir()) {
         (None, Some(run)) => run.join("lyrminal.sock"),
         _ => state_dir().join("lyrminal.sock"),
@@ -570,6 +578,7 @@ pub fn relaunch_args() -> Vec<std::ffi::OsString> {
     add("--state-file", STATE_FILE.get());
     add("--cache-dir", CACHE_DIR.get());
     add("--library-dir", LIBRARY_DIR.get());
+    add("--socket", SOCKET.get());
     args
 }
 
