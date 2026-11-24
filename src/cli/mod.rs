@@ -43,6 +43,8 @@ pub struct LaunchArgs {
     pub preset: Option<String>,
     #[arg(long, value_name = "NAME", value_parser = non_empty, help = "Only follow this player for this session: a process name, MPRIS bus name or player identity")]
     pub player: Option<String>,
+    #[arg(long, value_name = "MS", allow_negative_numbers = true, help = "Use this global sync offset in milliseconds for this session; positive shows lines earlier")]
+    pub offset: Option<i64>,
 }
 
 impl LaunchArgs {
@@ -60,6 +62,9 @@ impl LaunchArgs {
         if let Some(v) = &self.player {
             out.push(("--player", "player.mode", "fixed".into()));
             out.push(("--player", "player.target", v.clone()));
+        }
+        if let Some(v) = self.offset {
+            out.push(("--offset", "sync.offsetMs", v.to_string()));
         }
         out
     }
