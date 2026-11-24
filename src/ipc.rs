@@ -71,12 +71,20 @@ fn alive(path: &Path) -> bool {
     std::os::unix::net::UnixStream::connect(path).is_ok()
 }
 
+fn reclaim(path: &Path) -> bool {
+    use std::os::unix::fs::FileTypeExt;
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+        Ok(meta) if !meta.file_type().is_socket() => false,
+        Ok(_) if alive(path) => false,
+        Ok(_) => std::fs::remove_file(path).is_ok(),
+    }
+}
+
 pub fn serve(path: PathBuf, tx: mpsc::UnboundedSender<Incoming>) -> Option<Server> {
-    if path.exists() {
-        if alive(&path) {
-            return None;
-        }
-        let _ = std::fs::remove_file(&path);
+    if !reclaim(&path) {
+        return None;
     }
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -201,5 +209,23 @@ mod tests {
         drop(server);
         assert!(!path.exists());
         assert_eq!(Client::connect(&path).await.err().as_deref(), Some(NOT_RUNNING));
+    }
+
+    #[tokio::test]
+    async fn leaves_files_that_are_not_sockets_alone() {
+        let path = std::env::temp_dir().join(format!("lyrminal-ipc-file-{}", std::process::id()));
+        std::fs::write(&path, "notes").unwrap();
+        let (tx, _rx) = mpsc::unbounded_channel::<Incoming>();
+        assert!(serve(path.clone(), tx).is_none());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "notes");
+        let _ = std::fs::remove_file(&path);
+        let stale = std::env::temp_dir().join(format!("lyrminal-ipc-stale-{}.sock", std::process::id()));
+        drop(std::os::unix::net::UnixListener::bind(&stale).unwrap());
+        assert!(stale.exists());
+        let (tx, _rx) = mpsc::unbounded_channel::<Incoming>();
+        let server = serve(stale.clone(), tx);
+        assert!(server.is_some());
+        drop(server);
+        assert!(!stale.exists());
     }
 }
