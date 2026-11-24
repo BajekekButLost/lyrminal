@@ -51,6 +51,12 @@ pub struct AddArgs {
     pub format: Option<Format>,
     #[arg(long, help = "Don't re-read the file or URL every time the sync loads")]
     pub no_watch: bool,
+    #[arg(
+        long,
+        conflicts_with_all = ["title", "artists", "album", "duration", "isrc", "spotify_id", "no_watch"],
+        help = "Don't save it: show it in the running app for the playing song until the song changes"
+    )]
+    pub temporary: bool,
 }
 
 pub fn parse_length(s: &str) -> Result<f64, String> {
@@ -170,9 +176,32 @@ fn describe(q: &TrackQuery) -> String {
     if artist.is_empty() { format!("“{}”", q.title) } else { format!("“{}” by {artist}", q.title) }
 }
 
+async fn add_temporary(source: Source, pasted: Option<String>, format: Option<Format>) -> i32 {
+    let text = match pasted {
+        Some(text) => text,
+        None => crate::library::read_source(&source, &crate::providers::http_client())
+            .await
+            .unwrap_or_else(|e| super::fail(e)),
+    };
+    let request = crate::ipc::Request::Temporary(crate::ipc::TemporaryLyrics { text, source, format });
+    match crate::ipc::call(&request).await {
+        Ok(v) => {
+            println!("Showing temporary lyrics for “{}” until the song changes", v["title"].as_str().unwrap_or(""));
+            if let Some(w) = v["warning"].as_str() {
+                eprintln!("lyrminal: {w}");
+            }
+            0
+        }
+        Err(e) => super::fail(e),
+    }
+}
+
 async fn add(args: AddArgs) -> i32 {
     let source = source_for(args.source.as_deref()).unwrap_or_else(|e| super::fail(e));
     let pasted = (source == Source::Stdin).then(super::read_stdin);
+    if args.temporary {
+        return add_temporary(source, pasted, args.format).await;
+    }
     let track = track_for(&args.track).await;
     let req = ImportRequest {
         track: track.clone(),

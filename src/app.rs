@@ -680,8 +680,44 @@ impl App {
                 self.library_changed(&change);
                 crate::ipc::ok(serde_json::json!({}))
             }
+            crate::ipc::Request::Temporary(t) => self.load_temporary(t),
         };
         let _ = msg.reply.send(answer);
+    }
+
+    fn playing_track(&self) -> Option<&TrackMeta> {
+        self.track.as_ref().filter(|t| !matches!(t.media_kind(), MediaKind::Ad | MediaKind::Episode))
+    }
+
+    fn load_temporary(&mut self, t: crate::ipc::TemporaryLyrics) -> serde_json::Value {
+        let Some(track) = self.playing_track() else {
+            return crate::ipc::error("nothing is playing");
+        };
+        let req = ImportRequest {
+            track: track.query(),
+            identity: track.identity_key(),
+            temporary: true,
+            source: t.source,
+            watch: false,
+            format: t.format,
+            pasted: None,
+        };
+        match temporary_import(req, &t.text) {
+            Ok(LibraryDone::Imported {
+                identity,
+                resolution,
+                warning,
+                ..
+            }) => {
+                let title = resolution.candidate.title.clone();
+                self.temporary = Some((identity, resolution.clone()));
+                self.show_now(resolution);
+                self.notify("Loaded temporary lyrics for this song");
+                crate::ipc::ok(serde_json::json!({ "title": title, "warning": warning }))
+            }
+            Ok(_) => crate::ipc::error("the lyrics could not be loaded"),
+            Err(e) => crate::ipc::error(e),
+        }
     }
 
     fn library_changed(&mut self, change: &crate::ipc::LibraryChange) {
@@ -1965,41 +2001,20 @@ impl App {
     }
 }
 
-pub async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
-    let text = match req.pasted {
+pub async fn import(mut req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
+    let text = match req.pasted.take() {
         Some(p) => p,
         None => library::read_source(&req.source, &client).await?,
     };
     if text.len() > library::MAX_BYTES {
         return Err("the lyrics are larger than 8 MB".into());
     }
+    if req.temporary {
+        return temporary_import(req, &text);
+    }
     let (lyrics, detected) = library::parse(&text, &req.source, req.format, req.track.duration)?;
     let warning = library::title_warning(&text, detected, &req.track);
     let key = req.track.key();
-    if req.temporary {
-        let candidate = Candidate {
-            provider: crate::providers::local::ID.into(),
-            id: TEMPORARY_ID.into(),
-            title: req.track.title.clone(),
-            artists: req.track.artists.clone(),
-            album: req.track.album.clone(),
-            duration: req.track.duration,
-            tier: Some(MatchTier::Exact),
-            kind_hint: Some(lyrics.kind),
-            note: Some(format!("temporary {} {}", req.source.label(), req.source.name())),
-        };
-        return Ok(LibraryDone::Imported {
-            identity: req.identity,
-            key,
-            resolution: Resolution {
-                candidate,
-                lyrics,
-                manual: true,
-            },
-            temporary: true,
-            warning,
-        });
-    }
     let now = library::now();
     let entry = Entry {
         id: Library::id_for(&key),
@@ -2027,6 +2042,33 @@ pub async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -
             manual: false,
         },
         temporary: false,
+        warning,
+    })
+}
+
+pub fn temporary_import(req: ImportRequest, text: &str) -> Result<LibraryDone, String> {
+    let (lyrics, detected) = library::parse(text, &req.source, req.format, req.track.duration)?;
+    let warning = library::title_warning(text, detected, &req.track);
+    let candidate = Candidate {
+        provider: crate::providers::local::ID.into(),
+        id: TEMPORARY_ID.into(),
+        title: req.track.title.clone(),
+        artists: req.track.artists.clone(),
+        album: req.track.album.clone(),
+        duration: req.track.duration,
+        tier: Some(MatchTier::Exact),
+        kind_hint: Some(lyrics.kind),
+        note: Some(format!("temporary {} {}", req.source.label(), req.source.name())),
+    };
+    Ok(LibraryDone::Imported {
+        identity: req.identity,
+        key: req.track.key(),
+        resolution: Resolution {
+            candidate,
+            lyrics,
+            manual: true,
+        },
+        temporary: true,
         warning,
     })
 }

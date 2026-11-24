@@ -13,6 +13,14 @@ pub enum Request {
     NowPlaying,
     ReloadConfig,
     LibraryChanged(LibraryChange),
+    Temporary(TemporaryLyrics),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporaryLyrics {
+    pub text: String,
+    pub source: crate::library::Source,
+    pub format: Option<crate::lyrics::formats::Format>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
