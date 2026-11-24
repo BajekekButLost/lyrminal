@@ -672,8 +672,20 @@ impl App {
     pub fn on_ipc(&mut self, msg: crate::ipc::Incoming) {
         let answer = match msg.request {
             crate::ipc::Request::NowPlaying => crate::ipc::ok(crate::now_playing::snapshot(self, Instant::now())),
+            crate::ipc::Request::ReloadConfig => match self.reload_config() {
+                Ok(()) => crate::ipc::ok(serde_json::json!({})),
+                Err(e) => crate::ipc::error(e),
+            },
         };
         let _ = msg.reply.send(answer);
+    }
+
+    pub fn reload_config(&mut self) -> Result<(), String> {
+        let cfg = Config::load().map_err(|e| format!("{e:#}"))?;
+        let old = std::mem::replace(&mut self.cfg, cfg);
+        self.apply_config(&old);
+        self.notify("Settings reloaded");
+        Ok(())
     }
 
     pub fn on_event(&mut self, ev: Event) {

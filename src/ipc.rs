@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
     NowPlaying,
+    ReloadConfig,
 }
 
 pub struct Incoming {
@@ -128,6 +129,25 @@ impl Client {
 
 pub async fn call(request: &Request) -> Result<Value, String> {
     Client::connect(&crate::config::socket_path()).await?.call(request).await
+}
+
+pub fn call_blocking(request: &Request) -> Result<Value, String> {
+    use std::io::{BufRead, Write};
+    let stream = std::os::unix::net::UnixStream::connect(crate::config::socket_path()).map_err(|_| NOT_RUNNING.to_string())?;
+    let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+    let mut text = serde_json::to_string(request).map_err(|e| e.to_string())?;
+    text.push('\n');
+    (&stream).write_all(text.as_bytes()).map_err(|_| NOT_RUNNING.to_string())?;
+    let mut line = String::new();
+    std::io::BufReader::new(&stream)
+        .read_line(&mut line)
+        .map_err(|_| "Lyrminal did not answer".to_string())?;
+    let v: Value = serde_json::from_str(&line).map_err(|e| format!("unexpected answer from Lyrminal ({e})"))?;
+    if v["ok"].as_bool() == Some(true) {
+        Ok(v)
+    } else {
+        Err(v["error"].as_str().unwrap_or("Lyrminal could not answer").to_string())
+    }
 }
 
 #[cfg(test)]

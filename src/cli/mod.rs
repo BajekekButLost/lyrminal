@@ -79,6 +79,15 @@ pub fn save_config(cfg: &Config) {
     if let Err(e) = cfg.save() {
         fail(format!("could not save {}: {e:#}", Config::path().display()));
     }
+    tell_app(&crate::ipc::Request::ReloadConfig);
+}
+
+pub fn tell_app(request: &crate::ipc::Request) {
+    if let Err(e) = crate::ipc::call_blocking(request)
+        && e != crate::ipc::NOT_RUNNING
+    {
+        eprintln!("lyrminal: saved, but the running app could not take the change: {e}");
+    }
 }
 
 pub fn stdin_piped() -> bool {
