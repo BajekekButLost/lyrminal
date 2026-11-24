@@ -455,10 +455,13 @@ async fn update(args: UpdateArgs) -> i32 {
     if moved && let Some(other) = lib.get(&entry.id) {
         super::fail(format!("another sync ({}) is already saved for that song", &other.id[..SHORT_ID]));
     }
-    if moved && let Err(e) = lib.remove(&old.id) {
-        super::fail(format!("could not update the library: {e}"));
-    }
     let saved = lib.put(entry, &text).unwrap_or_else(|e| super::fail(format!("could not save the lyrics: {e}")));
+    if moved && let Err(e) = lib.remove(&old.id) {
+        eprintln!(
+            "lyrminal: saved the new sync, but could not remove the old one ({}): {e}",
+            &old.id[..SHORT_ID]
+        );
+    }
     println!("Updated {} as {} ({})", describe(&saved.track), &saved.id[..SHORT_ID], saved.summary());
     super::library_changed(LibraryChange {
         added: if moved { vec![saved.key.clone()] } else { Vec::new() },
