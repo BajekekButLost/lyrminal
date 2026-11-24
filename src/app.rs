@@ -786,7 +786,9 @@ impl App {
             if resolution.candidate.provider == local
                 && (change.changed.contains(&resolution.candidate.id) || change.removed.contains(&resolution.candidate.id)));
         let added = self.track_key().is_some_and(|k| change.added.contains(&k));
-        if self.track.is_some() && self.temporary.is_none() && (showing || added) {
+        let touched = !(change.added.is_empty() && change.changed.is_empty() && change.removed.is_empty());
+        let loading = matches!(self.lyrics, LyricsState::Loading) && touched;
+        if self.track.is_some() && self.temporary.is_none() && (showing || added || loading) {
             self.schedule_fetch(Duration::ZERO);
         }
         self.dirty = true;
@@ -2404,6 +2406,34 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.quit);
         assert_eq!(app.restart_into, Some(path));
+    }
+
+    #[tokio::test]
+    async fn library_changes_during_a_lookup_start_it_again() {
+        let mut app = app();
+        app.guide = None;
+        app.on_player(snapshot());
+        app.lyrics = LyricsState::Loading;
+        let before = app.generation;
+        app.library_changed(&crate::ipc::LibraryChange {
+            changed: vec!["abc".into()],
+            ..Default::default()
+        });
+        assert!(app.generation > before);
+        assert!(matches!(app.lyrics, LyricsState::Waiting));
+        app.on_msg(AppMsg::Resolved {
+            generation: before,
+            outcome: Outcome {
+                result: None,
+                attempts: Vec::new(),
+                rate_limits: Vec::new(),
+            },
+        });
+        assert!(matches!(app.lyrics, LyricsState::Waiting));
+        let quiet = app.generation;
+        app.lyrics = LyricsState::Loading;
+        app.library_changed(&crate::ipc::LibraryChange::default());
+        assert_eq!(app.generation, quiet);
     }
 
     #[tokio::test]
