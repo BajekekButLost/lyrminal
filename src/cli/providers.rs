@@ -21,6 +21,8 @@ pub enum ProvidersCommand {
     Disable(IdsArgs),
     #[command(about = "Change a provider's priority; the place can also come from stdin")]
     Move(MoveArgs),
+    #[command(about = "Set the whole priority order; ids can also come from stdin")]
+    Order(IdsArgs),
 }
 
 #[derive(Args, Debug)]
@@ -166,12 +168,39 @@ fn move_provider(args: MoveArgs) -> i32 {
     0
 }
 
+pub fn order_from(names: &[String]) -> Result<Vec<String>, String> {
+    let mut ids: Vec<String> = Vec::new();
+    for name in names.iter().flat_map(|n| n.split([',', ' '])).map(str::trim).filter(|n| !n.is_empty()) {
+        let id = resolve(name)?.id.to_string();
+        if ids.contains(&id) {
+            return Err(format!("{id} is listed twice"));
+        }
+        ids.push(id);
+    }
+    if ids.is_empty() {
+        return Err("give the providers in the order they should be tried".into());
+    }
+    Ok(ids)
+}
+
+fn order(args: IdsArgs) -> i32 {
+    let names = super::read_list(args.providers, "provider");
+    let ids = order_from(&names).unwrap_or_else(|e| super::fail(e));
+    let mut cfg = super::load_config();
+    cfg.providers.order = ids;
+    cfg.providers.order = ordered_ids(&cfg);
+    super::save_config(&cfg);
+    print_order(&cfg, false);
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
         ProvidersCommand::Enable(a) => set_enabled(a, true),
         ProvidersCommand::Disable(a) => set_enabled(a, false),
         ProvidersCommand::Move(a) => move_provider(a),
+        ProvidersCommand::Order(a) => order(a),
     }
 }
 
@@ -202,5 +231,16 @@ mod tests {
         assert_eq!(target_position("2", 4, 6), Ok(1));
         assert!(target_position("7", 0, 6).is_err());
         assert!(target_position("0", 0, 6).is_err());
+    }
+
+    #[test]
+    fn reads_a_whole_order() {
+        let order = order_from(&["lrclib,spicy".into(), "LRC.red".into()]).unwrap();
+        assert_eq!(order, vec!["lrclib", "spicy-lyrics", "lrc-red"]);
+        let mut cfg = Config::default();
+        cfg.providers.order = order;
+        assert_eq!(ordered_ids(&cfg), vec!["local-library", "lrclib", "spicy-lyrics", "unison", "lrcmux", "lrc-red"]);
+        assert!(order_from(&["lrclib".into(), "LRCLIB".into()]).is_err());
+        assert!(order_from(&[]).is_err());
     }
 }
