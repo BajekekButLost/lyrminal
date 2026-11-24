@@ -334,10 +334,7 @@ where
 }
 
 fn restart_args() -> Vec<std::ffi::OsString> {
-    match crate::config::base_dir() {
-        Some(base) => vec!["--base-directory".into(), base.into()],
-        None => Vec::new(),
-    }
+    crate::config::relaunch_args()
 }
 
 #[cfg(unix)]

@@ -26,6 +26,8 @@ pub struct GlobalArgs {
     pub base_directory: Option<String>,
     #[arg(long, global = true, help = "Same as --base-directory, in a new randomly named temporary folder")]
     pub temp_base_directory: bool,
+    #[arg(long, global = true, value_name = "FILE", value_parser = non_empty, help = "Read and save the settings in FILE instead of config.json")]
+    pub config: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

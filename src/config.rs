@@ -513,6 +513,7 @@ impl Preset {
 }
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
@@ -520,6 +521,23 @@ pub fn set_base_dir(dir: PathBuf) {
 
 pub fn base_dir() -> Option<&'static Path> {
     BASE_DIR.get().map(PathBuf::as_path)
+}
+
+pub fn set_config_file(path: PathBuf) {
+    let _ = CONFIG_FILE.set(path);
+}
+
+pub fn relaunch_args() -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    let mut add = |flag: &str, value: Option<&PathBuf>| {
+        if let Some(v) = value {
+            args.push(flag.into());
+            args.push(v.into());
+        }
+    };
+    add("--base-directory", BASE_DIR.get());
+    add("--config", CONFIG_FILE.get());
+    args
 }
 
 fn user_dir(base_rel: &str, system: Option<PathBuf>) -> PathBuf {
@@ -574,7 +592,7 @@ pub fn create_temp_base_dir() -> Result<PathBuf> {
 
 impl Config {
     pub fn path() -> PathBuf {
-        config_dir().join("config.json")
+        CONFIG_FILE.get().cloned().unwrap_or_else(|| config_dir().join("config.json"))
     }
 
     pub fn load() -> Result<Self> {

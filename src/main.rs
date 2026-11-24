@@ -49,6 +49,13 @@ fn setup_base(global: &cli::GlobalArgs) {
         Some(Err(e)) => cli::fail(format!("{e:#}")),
         None => {}
     }
+    if let Some(file) = &global.config {
+        let path = library::expand_path(file);
+        if path.is_dir() {
+            cli::fail(format!("--config needs a file, {} is a folder", path.display()));
+        }
+        config::set_config_file(path);
+    }
 }
 
 #[tokio::main]
