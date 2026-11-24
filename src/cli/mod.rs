@@ -67,6 +67,32 @@ pub fn load_config() -> Config {
     Config::load().unwrap_or_else(|e| fail(format!("{e:#}")))
 }
 
+pub fn save_config(cfg: &Config) {
+    if let Err(e) = cfg.save() {
+        fail(format!("could not save {}: {e:#}", Config::path().display()));
+    }
+}
+
+pub fn stdin_piped() -> bool {
+    !std::io::IsTerminal::is_terminal(&std::io::stdin())
+}
+
+pub fn read_stdin() -> String {
+    let mut text = String::new();
+    if let Err(e) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut text) {
+        fail(format!("could not read stdin: {e}"));
+    }
+    text
+}
+
+pub fn read_value(value: Option<String>, what: &str) -> String {
+    match value {
+        Some(v) if v != "-" => v,
+        _ if stdin_piped() => read_stdin().trim_end_matches(['\n', '\r']).to_string(),
+        _ => fail(format!("{what} needs a value, as an argument or on stdin")),
+    }
+}
+
 pub async fn run(command: Command) -> i32 {
     match command {
         Command::Paths(args) => paths::run(args),

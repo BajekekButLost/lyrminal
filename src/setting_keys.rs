@@ -108,14 +108,14 @@ pub fn apply(cfg: &mut Config, item: &Item, value: &str) -> Result<(), String> {
             let text = text.strip_suffix(unit).unwrap_or(text).trim();
             let n: f64 = text.parse().map_err(|_| format!("“{value}” is not a number"))?;
             if !n.is_finite() || n < *min || n > *max {
-                return Err(format!("{} must be between {}", item.label, range(*min, *max, *decimals, unit)));
+                return Err(format!("{} must be between {}", item.key, range(*min, *max, *decimals, unit)));
             }
             let scale = 10f64.powi(*decimals as i32);
             set(cfg, (n * scale).round() / scale);
         }
         Kind::Text { set, .. } => set(cfg, value.to_string()),
         Kind::Preset { .. } => Preset::ALL[choice_index(&preset_labels(), value)?].apply(cfg),
-        _ => return Err(format!("{} can't be set", item.label)),
+        _ => return Err(format!("{} can't be set", item.key)),
     }
     Ok(())
 }

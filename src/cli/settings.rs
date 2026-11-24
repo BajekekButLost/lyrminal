@@ -16,6 +16,16 @@ pub enum SettingsCommand {
     List(ListArgs),
     #[command(about = "Print the value of a setting")]
     Get(GetArgs),
+    #[command(about = "Change a setting; the value can also come from stdin")]
+    Set(SetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SetArgs {
+    #[arg(help = "The setting's key, e.g. appearance.fontScale")]
+    pub key: String,
+    #[arg(allow_hyphen_values = true, help = "The new value; leave it out or use - to read it from stdin")]
+    pub value: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -109,9 +119,24 @@ fn get(args: GetArgs) -> i32 {
     0
 }
 
+pub fn change(s: &Setting, f: impl FnOnce(&mut Config) -> Result<(), String>) {
+    let mut cfg = super::load_config();
+    f(&mut cfg).unwrap_or_else(|e| super::fail(e));
+    super::save_config(&cfg);
+    println!("{} = {}", s.key(), setting_keys::value(&cfg, &s.item, false));
+}
+
+fn set(args: SetArgs) -> i32 {
+    let s = find(&args.key);
+    let value = super::read_value(args.value, s.key());
+    change(&s, |cfg| setting_keys::apply(cfg, &s.item, &value));
+    0
+}
+
 pub fn run(args: SettingsArgs) -> i32 {
     match args.command {
         SettingsCommand::List(a) => list(a),
         SettingsCommand::Get(a) => get(a),
+        SettingsCommand::Set(a) => set(a),
     }
 }
