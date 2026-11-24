@@ -364,6 +364,7 @@ fn build_in(dir: &Path, tarball: &[u8]) -> Result<Vec<u8>, String> {
         std::process::Command::new("cargo")
             .args(["build", "--release", "--locked", "--manifest-path"])
             .arg(src.join("Cargo.toml"))
+            .current_dir(&src)
             .env("CARGO_TARGET_DIR", dir.join("target"))
             .stdin(std::process::Stdio::null()),
         "cargo build",
