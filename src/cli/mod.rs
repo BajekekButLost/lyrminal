@@ -45,6 +45,8 @@ pub struct LaunchArgs {
     pub player: Option<String>,
     #[arg(long, value_name = "MS", allow_negative_numbers = true, help = "Use this global sync offset in milliseconds for this session; positive shows lines earlier")]
     pub offset: Option<i64>,
+    #[arg(long, help = "Keep Lyrminal read-only for this session: no play, pause, seek or skip")]
+    pub no_controls: bool,
 }
 
 impl LaunchArgs {
@@ -65,6 +67,9 @@ impl LaunchArgs {
         }
         if let Some(v) = self.offset {
             out.push(("--offset", "sync.offsetMs", v.to_string()));
+        }
+        if self.no_controls {
+            out.push(("--no-controls", "controls.enabled", "off".into()));
         }
         out
     }
