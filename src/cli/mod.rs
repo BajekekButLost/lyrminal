@@ -1,4 +1,5 @@
 mod paths;
+mod providers;
 mod settings;
 
 use clap::{Args, Parser, Subcommand};
@@ -48,6 +49,8 @@ pub enum Command {
     Paths(paths::PathsArgs),
     #[command(about = "Read and change the settings (everything except the lyrics providers)")]
     Settings(settings::SettingsArgs),
+    #[command(about = "Order, turn on/off and configure the lyrics providers")]
+    Providers(providers::ProvidersArgs),
 }
 
 pub fn non_empty(s: &str) -> Result<String, String> {
@@ -116,5 +119,6 @@ pub async fn run(command: Command) -> i32 {
     match command {
         Command::Paths(args) => paths::run(args),
         Command::Settings(args) => settings::run(args),
+        Command::Providers(args) => providers::run(args),
     }
 }
