@@ -21,7 +21,7 @@ pub enum LibraryCommand {
     List(ListArgs),
     #[command(about = "Show everything about a saved sync, or print its saved copy")]
     Show(ShowArgs),
-    #[command(about = "Save a sync for a song from a file, a URL or stdin")]
+    #[command(about = "Save a sync from a file, a URL or stdin; it is for the playing song unless you give --title")]
     Add(AddArgs),
 }
 
@@ -110,11 +110,34 @@ impl TrackArgs {
     }
 }
 
-async fn track_for(args: &TrackArgs) -> TrackQuery {
-    if !args.given() {
-        super::fail("give the song with --title and --artist");
+pub async fn playing_track() -> Result<TrackQuery, String> {
+    let data = crate::ipc::call(&crate::ipc::Request::NowPlaying)
+        .await
+        .map_err(|e| format!("{e}, so give the song with --title and --artist"))?;
+    let title = data["title"].as_str().unwrap_or("").to_string();
+    if title.is_empty() {
+        return Err("nothing is playing, so give the song with --title and --artist".into());
     }
-    let mut q = TrackQuery::default();
+    let text = |k: &str| data[k].as_str().map(str::to_string).filter(|s| !s.is_empty());
+    Ok(TrackQuery {
+        title,
+        artists: data["artists"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default(),
+        album: text("album"),
+        duration: data["length"].as_f64().filter(|l| *l > 0.0),
+        spotify_id: text("spotifyId"),
+        isrc: text("isrc"),
+    })
+}
+
+async fn track_for(args: &TrackArgs) -> TrackQuery {
+    let mut q = if args.given() {
+        TrackQuery::default()
+    } else {
+        playing_track().await.unwrap_or_else(|e| super::fail(e))
+    };
     args.apply(&mut q);
     q
 }
