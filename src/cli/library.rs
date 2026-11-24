@@ -25,6 +25,16 @@ pub enum LibraryCommand {
     Add(AddArgs),
     #[command(about = "Change a saved sync: its song, source, format or whether it checks for changes")]
     Update(UpdateArgs),
+    #[command(about = "Remove saved syncs; ids can also come from stdin")]
+    Remove(RemoveArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct RemoveArgs {
+    #[arg(help = "Sync ids or their start; leave them out or use - to read them from stdin, one per line")]
+    pub ids: Vec<String>,
+    #[arg(short, long, help = "Don't ask before removing")]
+    pub yes: bool,
 }
 
 #[derive(Args, Debug)]
@@ -450,12 +460,47 @@ async fn update(args: UpdateArgs) -> i32 {
     0
 }
 
+fn remove(args: RemoveArgs) -> i32 {
+    let lib = Library::default();
+    let all = lib.entries();
+    let mut doomed: Vec<Entry> = Vec::new();
+    for id in super::read_list(args.ids, "sync id") {
+        let e = find_in(&all, &id).unwrap_or_else(|e| super::fail(e));
+        if !doomed.iter().any(|d| d.id == e.id) {
+            doomed.push(e);
+        }
+    }
+    if !args.yes && !super::stdin_piped() {
+        for e in &doomed {
+            println!("{}  {}", &e.id[..SHORT_ID], describe(&e.track));
+        }
+        let what = if doomed.len() == 1 { "this sync".to_string() } else { format!("these {} syncs", doomed.len()) };
+        if !super::confirm(&format!("Remove {what}?")) {
+            println!("Nothing was removed");
+            return 1;
+        }
+    }
+    for e in &doomed {
+        if let Err(err) = lib.remove(&e.id) {
+            super::fail(format!("could not update the library: {err}"));
+        }
+        println!("Removed {} ({})", describe(&e.track), &e.id[..SHORT_ID]);
+    }
+    super::library_changed(LibraryChange {
+        added: Vec::new(),
+        changed: Vec::new(),
+        removed: doomed.into_iter().map(|e| e.id).collect(),
+    });
+    0
+}
+
 pub async fn run(args: LibraryArgs) -> i32 {
     match args.command {
         LibraryCommand::List(a) => list(a),
         LibraryCommand::Show(a) => show(a),
         LibraryCommand::Add(a) => add(a).await,
         LibraryCommand::Update(a) => update(a).await,
+        LibraryCommand::Remove(a) => remove(a),
     }
 }
 

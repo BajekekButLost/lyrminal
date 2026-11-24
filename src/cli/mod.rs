@@ -119,6 +119,17 @@ pub fn read_stdin() -> String {
     text
 }
 
+pub fn confirm(question: &str) -> bool {
+    use std::io::Write;
+    print!("{question} [y/N] ");
+    let _ = std::io::stdout().flush();
+    let mut answer = String::new();
+    if std::io::stdin().read_line(&mut answer).is_err() {
+        return false;
+    }
+    matches!(answer.trim().to_lowercase().as_str(), "y" | "yes")
+}
+
 pub fn read_list(values: Vec<String>, what: &str) -> Vec<String> {
     if !values.is_empty() && values != ["-"] {
         return values;
