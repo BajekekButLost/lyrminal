@@ -516,6 +516,7 @@ static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
 static STATE_FILE: OnceLock<PathBuf> = OnceLock::new();
 static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static LIBRARY_DIR: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
@@ -541,6 +542,14 @@ pub fn set_cache_dir(dir: PathBuf) {
     let _ = CACHE_DIR.set(dir);
 }
 
+pub fn set_library_dir(dir: PathBuf) {
+    let _ = LIBRARY_DIR.set(dir);
+}
+
+pub fn library_dir() -> PathBuf {
+    LIBRARY_DIR.get().cloned().unwrap_or_else(|| data_dir().join("library"))
+}
+
 pub fn relaunch_args() -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     let mut add = |flag: &str, value: Option<&PathBuf>| {
@@ -553,6 +562,7 @@ pub fn relaunch_args() -> Vec<std::ffi::OsString> {
     add("--config", CONFIG_FILE.get());
     add("--state-file", STATE_FILE.get());
     add("--cache-dir", CACHE_DIR.get());
+    add("--library-dir", LIBRARY_DIR.get());
     args
 }
 

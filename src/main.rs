@@ -58,6 +58,9 @@ fn setup_base(global: &cli::GlobalArgs) {
     if let Some(dir) = &global.cache_dir {
         config::set_cache_dir(dir_arg("--cache-dir", dir));
     }
+    if let Some(dir) = &global.library_dir {
+        config::set_library_dir(dir_arg("--library-dir", dir));
+    }
 }
 
 fn dir_arg(flag: &str, value: &str) -> std::path::PathBuf {

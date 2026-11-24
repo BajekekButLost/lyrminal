@@ -275,7 +275,7 @@ pub struct Library {
 
 impl Default for Library {
     fn default() -> Self {
-        Self::new(crate::config::data_dir().join("library"))
+        Self::new(crate::config::library_dir())
     }
 }
 

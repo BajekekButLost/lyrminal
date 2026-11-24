@@ -32,6 +32,8 @@ pub struct GlobalArgs {
     pub state_file: Option<String>,
     #[arg(long, global = true, value_name = "DIR", value_parser = non_empty, help = "Keep cached lyrics and lookups in DIR")]
     pub cache_dir: Option<String>,
+    #[arg(long, global = true, value_name = "DIR", value_parser = non_empty, help = "Use DIR as the local library (index.json and the saved syncs)")]
+    pub library_dir: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
