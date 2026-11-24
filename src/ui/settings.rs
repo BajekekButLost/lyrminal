@@ -1058,6 +1058,15 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                     Kind::Info,
                 ),
                 item("Config file", &crate::config::Config::path().display().to_string(), Kind::Info),
+                setting(
+                    "general.liveReload",
+                    "Live reload config",
+                    "Apply changes to the config file as soon as it is saved, for example from an editor. Off: edits are only read when Lyrminal starts or a lyrminal settings command tells it to reload.",
+                    Kind::Toggle {
+                        get: |c| c.general.live_reload,
+                        set: |c, v| c.general.live_reload = v,
+                    },
+                ),
                 item(
                     "Welcome tour",
                     "Walk through setting up the player and providers again, then try the main looks on a song that is playing.",

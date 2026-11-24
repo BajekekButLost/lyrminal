@@ -21,6 +21,19 @@ pub struct Config {
     pub controls: ControlsConfig,
     pub cache: CacheConfig,
     pub updates: UpdatesConfig,
+    pub general: GeneralConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GeneralConfig {
+    pub live_reload: bool,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self { live_reload: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -638,6 +651,11 @@ pub fn create_temp_base_dir() -> Result<PathBuf> {
 impl Config {
     pub fn path() -> PathBuf {
         CONFIG_FILE.get().cloned().unwrap_or_else(|| config_dir().join("config.json"))
+    }
+
+    pub fn stamp() -> Option<(std::time::SystemTime, u64)> {
+        let meta = fs::metadata(Self::path()).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
     }
 
     pub fn load() -> Result<Self> {

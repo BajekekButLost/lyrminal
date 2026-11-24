@@ -29,6 +29,7 @@ use crate::update::{self, Release, Status as UpdateStatus};
 const FETCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const TOAST_FOR: Duration = Duration::from_secs(3);
 const MOUSE_SCROLL_ROWS: f64 = 4.0;
+const CONFIG_CHECK_EVERY: Duration = Duration::from_secs(1);
 
 pub enum LyricsState {
     NoPlayer,
@@ -194,6 +195,8 @@ pub struct App {
     update_checks: bool,
     next_update_check: Option<Instant>,
     pub restart_into: Option<std::path::PathBuf>,
+    config_stamp: Option<(std::time::SystemTime, u64)>,
+    next_config_check: Instant,
 }
 
 impl App {
@@ -259,6 +262,8 @@ impl App {
             update_checks: false,
             next_update_check: None,
             restart_into: None,
+            config_stamp: Config::stamp(),
+            next_config_check: now + CONFIG_CHECK_EVERY,
         };
         app.ensure_fonts();
         app
@@ -398,6 +403,7 @@ impl App {
         }
         self.update_tick(now);
         self.guide_tick(now);
+        self.watch_config(now);
     }
 
     pub fn needs_animation(&self) -> bool {
@@ -782,8 +788,9 @@ impl App {
 
     pub fn reload_config(&mut self) -> Result<(), String> {
         let cfg = Config::load().map_err(|e| format!("{e:#}"))?;
+        self.config_stamp = Config::stamp();
         let old = std::mem::replace(&mut self.cfg, cfg);
-        self.apply_config(&old);
+        self.apply_changes(&old);
         self.notify("Settings reloaded");
         Ok(())
     }
@@ -1215,10 +1222,32 @@ impl App {
     }
 
     pub fn apply_config(&mut self, old: &Config) {
-        let json = |v: &dyn erased::Json| v.json();
         if let Err(e) = self.cfg.save() {
             self.notify(format!("Could not save settings: {e}"));
         }
+        self.config_stamp = Config::stamp();
+        self.apply_changes(old);
+    }
+
+    fn watch_config(&mut self, now: Instant) {
+        if !self.cfg.general.live_reload || now < self.next_config_check {
+            return;
+        }
+        self.next_config_check = now + CONFIG_CHECK_EVERY;
+        let stamp = Config::stamp();
+        if stamp == self.config_stamp {
+            return;
+        }
+        self.config_stamp = stamp;
+        if stamp.is_some()
+            && let Err(e) = self.reload_config()
+        {
+            self.notify(format!("The config file has a mistake, keeping the current settings: {e}"));
+        }
+    }
+
+    fn apply_changes(&mut self, old: &Config) {
+        let json = |v: &dyn erased::Json| v.json();
         let providers_changed = json(&self.cfg.providers) != json(&old.providers);
         if providers_changed {
             self.registry = Registry::from_config(&self.cfg, &self.client);
