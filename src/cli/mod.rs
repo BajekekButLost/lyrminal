@@ -85,6 +85,25 @@ pub fn read_stdin() -> String {
     text
 }
 
+pub fn read_list(values: Vec<String>, what: &str) -> Vec<String> {
+    if !values.is_empty() && values != ["-"] {
+        return values;
+    }
+    if !stdin_piped() {
+        fail(format!("give at least one {what}, as arguments or one per line on stdin"));
+    }
+    let list: Vec<String> = read_stdin()
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(String::from)
+        .collect();
+    if list.is_empty() {
+        fail(format!("stdin had no {what}"));
+    }
+    list
+}
+
 pub fn read_value(value: Option<String>, what: &str) -> String {
     match value {
         Some(v) if v != "-" => v,

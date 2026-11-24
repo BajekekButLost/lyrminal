@@ -18,6 +18,14 @@ pub enum SettingsCommand {
     Get(GetArgs),
     #[command(about = "Change a setting; the value can also come from stdin")]
     Set(SetArgs),
+    #[command(about = "Turn on/off settings the other way; keys can also come from stdin")]
+    Toggle(KeysArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct KeysArgs {
+    #[arg(help = "Setting keys; leave them out or use - to read them from stdin, one per line")]
+    pub keys: Vec<String>,
 }
 
 #[derive(Args, Debug)]
@@ -133,10 +141,31 @@ fn set(args: SetArgs) -> i32 {
     0
 }
 
+pub fn change_many(list: &[Setting], f: impl Fn(&mut Config, &Setting) -> Result<(), String>) {
+    let mut cfg = super::load_config();
+    for s in list {
+        f(&mut cfg, s).unwrap_or_else(|e| super::fail(e));
+    }
+    super::save_config(&cfg);
+    for s in list {
+        println!("{} = {}", s.key(), setting_keys::value(&cfg, &s.item, false));
+    }
+}
+
+fn toggle(args: KeysArgs) -> i32 {
+    let list: Vec<Setting> = super::read_list(args.keys, "setting key").iter().map(|k| find(k)).collect();
+    if let Some(s) = list.iter().find(|s| !matches!(s.item.kind, crate::ui::settings::Kind::Toggle { .. })) {
+        super::fail(format!("{} is not an on/off setting", s.key()));
+    }
+    change_many(&list, |cfg, s| setting_keys::apply(cfg, &s.item, "toggle"));
+    0
+}
+
 pub fn run(args: SettingsArgs) -> i32 {
     match args.command {
         SettingsCommand::List(a) => list(a),
         SettingsCommand::Get(a) => get(a),
         SettingsCommand::Set(a) => set(a),
+        SettingsCommand::Toggle(a) => toggle(a),
     }
 }
