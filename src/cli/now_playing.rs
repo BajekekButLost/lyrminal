@@ -16,11 +16,19 @@ pub struct NowPlayingArgs {
         help = "Print these fields, in this order"
     )]
     pub fields: Vec<Field>,
+    #[arg(long, conflicts_with = "fields", help = "Print every field: album, line numbers, progress, word, sync and provider too")]
+    pub full: bool,
 }
 
 impl NowPlayingArgs {
     fn fields(&self) -> Vec<Field> {
-        if self.fields.is_empty() { COMPACT.to_vec() } else { self.fields.clone() }
+        if self.full {
+            FULL.to_vec()
+        } else if self.fields.is_empty() {
+            COMPACT.to_vec()
+        } else {
+            self.fields.clone()
+        }
     }
 }
 
@@ -47,6 +55,21 @@ pub enum Field {
 }
 
 pub const COMPACT: &[Field] = &[Field::Status, Field::Artist, Field::Title, Field::Time, Field::Text];
+pub const FULL: &[Field] = &[
+    Field::Status,
+    Field::Artist,
+    Field::Title,
+    Field::Album,
+    Field::Position,
+    Field::Length,
+    Field::Line,
+    Field::Lines,
+    Field::Text,
+    Field::Progress,
+    Field::Word,
+    Field::Sync,
+    Field::Provider,
+];
 
 impl Field {
     pub fn key(self) -> &'static str {
