@@ -7,6 +7,7 @@ mod lyrics;
 mod player;
 mod providers;
 mod render;
+mod setting_keys;
 mod state;
 mod term;
 mod theme;

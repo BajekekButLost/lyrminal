@@ -32,6 +32,7 @@ pub enum SettingsAction {
 }
 
 pub const UPDATES_SECTION: &str = "Updates";
+pub const PRESET_KEY: &str = "appearance.preset";
 pub const UPDATE_LABEL: &str = "Lyrminal update";
 
 pub enum Kind {
@@ -69,6 +70,7 @@ pub enum Kind {
 }
 
 pub struct Item {
+    pub key: &'static str,
     pub label: String,
     pub desc: String,
     pub kind: Kind,
@@ -80,11 +82,33 @@ pub struct Section {
 }
 
 fn item(label: &str, desc: &str, kind: Kind) -> Item {
+    setting("", label, desc, kind)
+}
+
+fn setting(key: &'static str, label: &str, desc: &str, kind: Kind) -> Item {
     Item {
+        key,
         label: label.into(),
         desc: desc.into(),
         kind,
     }
+}
+
+fn tolerance(key: &'static str, get: fn(&Config) -> f64, set: fn(&mut Config, f64)) -> Item {
+    setting(
+        key,
+        "Duration tolerance",
+        tolerance_desc(),
+        Kind::Number {
+            min: 0.5,
+            max: 10.0,
+            step: 0.5,
+            decimals: 1,
+            unit: "s",
+            get,
+            set,
+        },
+    )
 }
 
 fn tolerance_desc() -> &'static str {
@@ -94,7 +118,8 @@ fn tolerance_desc() -> &'static str {
 pub const DEFAULT_LIBRARY_LABEL: &str = "Default sync library location";
 
 pub fn default_library_item() -> Item {
-    item(
+    setting(
+        "providers.localLibrary.defaultDir",
         DEFAULT_LIBRARY_LABEL,
         "The folder where you keep your sync files. Importing from a file starts there, so you only type the file name. Enter to edit, Tab completes folders, Ctrl-U clears.",
         Kind::Text {
@@ -113,7 +138,8 @@ pub fn default_library_item() -> Item {
 pub fn provider_page(id: &str) -> Vec<Item> {
     match id {
         crate::providers::local::ID => vec![
-            item(
+            setting(
+                "providers.localLibrary.enabled",
                 "Enabled",
                 "Use lyrics you added yourself. Press L to open the library and import a file, a URL or the clipboard for the playing track.",
                 Kind::Toggle {
@@ -121,7 +147,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::local::ID, v),
                 },
             ),
-            item(
+            setting(
+                "providers.localLibrary.prioritize",
                 "Prioritize local library",
                 "When a saved sync clearly matches the playing song, use it over the providers below the local library in the priority list, even if they have a better sync. Providers above it still win when they have a better sync.",
                 Kind::Toggle {
@@ -130,7 +157,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                 },
             ),
             default_library_item(),
-            item(
+            setting(
+                "providers.localLibrary.durationToleranceSecs",
                 "Duration tolerance",
                 "Lyrics saved for another copy of a song, such as the same track in a different player, are used when the title and artist match and the length differs by at most this much.",
                 Kind::Number {
@@ -158,7 +186,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
         ],
         crate::providers::spicy::ID => vec![
-            item(
+            setting(
+                "providers.spicyLyrics.enabled",
                 "Enabled",
                 "Use Spicy Lyrics. It returns community syncs first, then Apple Music and Spotify syncs.",
                 Kind::Toggle {
@@ -166,7 +195,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::spicy::ID, v),
                 },
             ),
-            item(
+            setting(
+                "providers.spicyLyrics.useOwnKey",
                 "Use your own key",
                 "Off: Spicy Lyrics works out of the box with Lyrminal's built-in key, shared by everyone. On: uses the API key below, with a rate limit of its own. Entering a key turns this on.",
                 Kind::Toggle {
@@ -174,7 +204,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.spicy_lyrics.use_own_key = v,
                 },
             ),
-            item(
+            setting(
+                "providers.spicyLyrics.apiKey",
                 "API key",
                 &format!(
                     "Optional. Secret key from developers.spicylyrics.org → Dashboard → Applications, used when Use your own key is on. Stored in {}. The {SPICY_KEY_ENV} environment variable overrides it, even when Use your own key is off.",
@@ -193,7 +224,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     folder: false,
                 },
             ),
-            item(
+            setting(
+                "providers.spicyLyrics.minTier",
                 "Auto-match",
                 "When the player gives no Spotify id, the worst search match Spicy Lyrics may pick on its own. A different version of a song has different timings, so exact is safest.",
                 Kind::Choice {
@@ -202,7 +234,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, i| c.providers.spicy_lyrics.min_tier = MatchTier::ALL[i.min(4)],
                 },
             ),
-            item(
+            setting(
+                "providers.spicyLyrics.checkResults",
                 "Check results",
                 "Spicy Lyrics' search finds tracks, not lyrics. On: the sync picker asks for the lyrics of the first results (see Results to check) and only lists those that have them. Off: lists every result, even ones without lyrics, using a single request.",
                 Kind::Toggle {
@@ -210,7 +243,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.spicy_lyrics.check_results = v,
                 },
             ),
-            item(
+            setting(
+                "providers.spicyLyrics.checkedResults",
                 "Results to check",
                 "How many search results Check results asks lyrics for. Each one is a request against the rate limit of the key in use, whether that's the shared built-in key or your own, and the rest are not listed.",
                 Kind::Number {
@@ -235,7 +269,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
         ],
         crate::providers::lrcred::ID => vec![
-            item(
+            setting(
+                "providers.lrcRed.enabled",
                 "Enabled",
                 "Use lrc.red: tens of millions of tracks, many word-synced, with duets and background vocals. No key needed.",
                 Kind::Toggle {
@@ -243,18 +278,10 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::lrcred::ID, v),
                 },
             ),
-            item(
-                "Duration tolerance",
-                tolerance_desc(),
-                Kind::Number {
-                    min: 0.5,
-                    max: 10.0,
-                    step: 0.5,
-                    decimals: 1,
-                    unit: "s",
-                    get: |c| c.providers.lrc_red.duration_tolerance_secs,
-                    set: |c, v| c.providers.lrc_red.duration_tolerance_secs = v,
-                },
+            tolerance(
+                "providers.lrcRed.durationToleranceSecs",
+                |c| c.providers.lrc_red.duration_tolerance_secs,
+                |c, v| c.providers.lrc_red.duration_tolerance_secs = v,
             ),
             item(
                 "Lookups",
@@ -264,7 +291,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             item("Credits", "lrc.red is credited and linked under the lyrics, as its terms require.", Kind::Info),
         ],
         crate::providers::unison::ID => vec![
-            item(
+            setting(
+                "providers.unison.enabled",
                 "Enabled",
                 "Use Better Lyrics' Unison: a free, public database of community-synced lyrics, many word-synced. No key needed.",
                 Kind::Toggle {
@@ -272,18 +300,10 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::unison::ID, v),
                 },
             ),
-            item(
-                "Duration tolerance",
-                tolerance_desc(),
-                Kind::Number {
-                    min: 0.5,
-                    max: 10.0,
-                    step: 0.5,
-                    decimals: 1,
-                    unit: "s",
-                    get: |c| c.providers.unison.duration_tolerance_secs,
-                    set: |c, v| c.providers.unison.duration_tolerance_secs = v,
-                },
+            tolerance(
+                "providers.unison.durationToleranceSecs",
+                |c| c.providers.unison.duration_tolerance_secs,
+                |c, v| c.providers.unison.duration_tolerance_secs = v,
             ),
             item(
                 "Lookups",
@@ -297,7 +317,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
         ],
         crate::providers::lrcmux::ID => vec![
-            item(
+            setting(
+                "providers.lrcmux.enabled",
                 "Enabled",
                 "Use lrcmux: a free lyrics API that gathers word- and line-synced lyrics from Deezer, KuGou and YouTube Music. No key needed.",
                 Kind::Toggle {
@@ -305,18 +326,10 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::lrcmux::ID, v),
                 },
             ),
-            item(
-                "Duration tolerance",
-                tolerance_desc(),
-                Kind::Number {
-                    min: 0.5,
-                    max: 10.0,
-                    step: 0.5,
-                    decimals: 1,
-                    unit: "s",
-                    get: |c| c.providers.lrcmux.duration_tolerance_secs,
-                    set: |c, v| c.providers.lrcmux.duration_tolerance_secs = v,
-                },
+            tolerance(
+                "providers.lrcmux.durationToleranceSecs",
+                |c| c.providers.lrcmux.duration_tolerance_secs,
+                |c, v| c.providers.lrcmux.duration_tolerance_secs = v,
             ),
             item(
                 "Lookups",
@@ -330,7 +343,8 @@ pub fn provider_page(id: &str) -> Vec<Item> {
             ),
         ],
         crate::providers::lrclib::ID => vec![
-            item(
+            setting(
+                "providers.lrclib.enabled",
                 "Enabled",
                 "Use LRCLIB: a free, open lyrics database with line-synced and some word-synced lyrics. No key needed.",
                 Kind::Toggle {
@@ -338,18 +352,10 @@ pub fn provider_page(id: &str) -> Vec<Item> {
                     set: |c, v| c.providers.set_enabled(crate::providers::lrclib::ID, v),
                 },
             ),
-            item(
-                "Duration tolerance",
-                tolerance_desc(),
-                Kind::Number {
-                    min: 0.5,
-                    max: 10.0,
-                    step: 0.5,
-                    decimals: 1,
-                    unit: "s",
-                    get: |c| c.providers.lrclib.duration_tolerance_secs,
-                    set: |c, v| c.providers.lrclib.duration_tolerance_secs = v,
-                },
+            tolerance(
+                "providers.lrclib.durationToleranceSecs",
+                |c| c.providers.lrclib.duration_tolerance_secs,
+                |c, v| c.providers.lrclib.duration_tolerance_secs = v,
             ),
             item(
                 "Lookups",
@@ -397,7 +403,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Player",
             items: vec![
-                item(
+                setting(
+                    "player.mode",
                     "Follow",
                     "Auto follows whichever player is playing, preferring the list below. Fixed only follows the process named below.",
                     Kind::Choice {
@@ -406,7 +413,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, i| c.player.mode = if i == 1 { PlayerMode::Fixed } else { PlayerMode::Auto },
                     },
                 ),
-                item(
+                setting(
+                    "player.target",
                     "Fixed player",
                     "Process name, MPRIS bus name or player identity to follow in fixed mode, e.g. spotifast.",
                     Kind::Text {
@@ -422,7 +430,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                     "Choose from the players currently on the media bus.",
                     Kind::Action(SettingsAction::PickPlayer),
                 ),
-                item(
+                setting(
+                    "player.preferred",
                     "Preferred players",
                     "Comma-separated, in order. Used by auto mode when several players are playing.",
                     Kind::Text {
@@ -439,7 +448,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         folder: false,
                     },
                 ),
-                item(
+                setting(
+                    "player.pollIntervalMs",
                     "Position poll interval",
                     "How often the playback position is re-read from the player. Between reads it is extrapolated.",
                     Kind::Number {
@@ -457,8 +467,14 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Appearance",
             items: vec![
-                item("Preset", if pixel { PRESET_DESC } else { CELL_PRESET_DESC }, Kind::Preset { pixel }),
-                item(
+                setting(
+                    PRESET_KEY,
+                    "Preset",
+                    if pixel { PRESET_DESC } else { CELL_PRESET_DESC },
+                    Kind::Preset { pixel },
+                ),
+                setting(
+                    "appearance.renderer",
                     "Renderer",
                     "Cell draws with terminal text. Pixel draws real fonts with blur, scale and glow through the kitty graphics protocol (kitty, Ghostty, WezTerm).",
                     Kind::Choice {
@@ -467,7 +483,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, i| c.appearance.renderer = if i == 1 { Renderer::Pixel } else { Renderer::Cell },
                     },
                 ),
-                item(
+                setting(
+                    "appearance.style",
                     "Style",
                     "Spring: per-word gradient wipe with glow and springy emphasis. Bloom: one soft edge sweeping the line, rippling scroll and flame emphasis.",
                     Kind::Choice {
@@ -476,7 +493,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, i| c.appearance.style = if i == 1 { VisualStyle::Bloom } else { VisualStyle::Spring },
                     },
                 ),
-                item(
+                setting(
+                    "appearance.albumTheming",
                     "Album art theming",
                     "Colour the lyrics and background from the album cover.",
                     Kind::Toggle {
@@ -484,7 +502,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.album_theming = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.background",
                     "Background",
                     "What to paint behind the lyrics when album art theming is on. None keeps the terminal background.",
                     Kind::Choice {
@@ -503,7 +522,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         },
                     },
                 ),
-                item(
+                setting(
+                    "appearance.albumArt",
                     "Cover art",
                     "Show the album cover in the header. Needs a terminal with kitty graphics; otherwise nothing is shown.",
                     Kind::Toggle {
@@ -511,7 +531,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.album_art = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.showHeader",
                     "Track header",
                     "Title, artist and album above the lyrics.",
                     Kind::Toggle {
@@ -519,7 +540,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.show_header = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.showProgress",
                     "Progress bar",
                     "Song position below the lyrics.",
                     Kind::Toggle {
@@ -527,7 +549,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.show_progress = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.showStatus",
                     "Status bar",
                     "Player, offset and key hints at the bottom.",
                     Kind::Toggle {
@@ -535,7 +558,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.show_status = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.alignment",
                     "Alignment",
                     "Left keeps duets on opposite sides. Center centres every line.",
                     Kind::Choice {
@@ -544,7 +568,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, i| c.appearance.alignment = if i == 1 { Alignment::Center } else { Alignment::Left },
                     },
                 ),
-                item(
+                setting(
+                    "appearance.lineGap",
                     "Line gap",
                     "Blank rows between lyric lines.",
                     Kind::Number {
@@ -557,7 +582,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.line_gap = v as u16,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.depthDimming",
                     "Depth dimming",
                     "Lines further from the current one get fainter, standing in for blur in the cell renderer.",
                     Kind::Toggle {
@@ -565,7 +591,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.depth_dimming = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.fadePrevious",
                     "Fade sung lines",
                     "Lines fade away once sung.",
                     Kind::Toggle {
@@ -573,7 +600,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.fade_previous = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.glow",
                     "Glow",
                     "Words brighten toward the accent colour as they are sung.",
                     Kind::Toggle {
@@ -581,7 +609,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.glow = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.emphasis",
                     "Emphasis on held words",
                     "Words held for a second or more animate letter by letter.",
                     Kind::Toggle {
@@ -589,7 +618,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.emphasis = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.syllableSpacing",
                     "Syllable spacing",
                     "Pixel renderer, Spring style. Joined keeps the syllables of a word touching as they grow and shrink. Separate scales each syllable on its own, like Spicy Lyrics, so small gaps open inside words.",
                     Kind::Choice {
@@ -600,7 +630,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         },
                     },
                 ),
-                item(
+                setting(
+                    "appearance.contrast",
                     "Contrast",
                     "Multiplies how bright unsung and sung lines are.",
                     Kind::Number {
@@ -613,7 +644,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.contrast = v as f32,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.fps",
                     "Frame rate",
                     "Animation frame rate of the cell renderer.",
                     Kind::Number {
@@ -626,7 +658,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.fps = v as u32,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.pixelFps",
                     "Pixel frame rate",
                     "Frame rate of the pixel renderer. Each frame is a full image, so keep it modest.",
                     Kind::Number {
@@ -639,7 +672,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.pixel_fps = v as u32,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.fontFamily",
                     "Pixel font",
                     "Font family for the pixel renderer. Empty uses the system sans-serif font.",
                     Kind::Text {
@@ -650,7 +684,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         folder: false,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.fontWeight",
                     "Pixel font weight",
                     "100 is thin, 400 regular, 700 bold, 900 black.",
                     Kind::Number {
@@ -663,7 +698,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.appearance.font_weight = v as u16,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.fontScale",
                     "Pixel font size",
                     "Lyrics size in the pixel renderer, in terminal rows.",
                     Kind::Number {
@@ -681,7 +717,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Scrolling",
             items: vec![
-                item(
+                setting(
+                    "scroll.animation",
                     "Animation",
                     "Staggered: each line follows the one above it with a short delay, rippling down the screen. Smooth: the whole page glides as one.",
                     Kind::Choice {
@@ -692,7 +729,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         },
                     },
                 ),
-                item(
+                setting(
+                    "scroll.speed",
                     "Speed",
                     "How fast the lyrics scroll to the next line. Higher is faster.",
                     Kind::Number {
@@ -705,7 +743,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.scroll.speed = v,
                     },
                 ),
-                item(
+                setting(
+                    "scroll.leadMs",
                     "Scroll ahead",
                     "Start moving to the next line this long before it is sung, so it is in place when it begins.",
                     Kind::Number {
@@ -718,7 +757,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.scroll.lead_ms = v as u32,
                     },
                 ),
-                item(
+                setting(
+                    "scroll.clickSeek",
                     "Click to seek",
                     "Clicking the lyrics jumps the song there: to the start of the line, or to the clicked word when the sync has word timings. Needs playback controls and mouse input.",
                     Kind::Choice {
@@ -737,7 +777,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         },
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.resumeFollowSecs",
                     "Resume following after",
                     "Seconds after you stop scrolling before the lyrics follow the song again.",
                     Kind::Number {
@@ -750,7 +791,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.resume_follow_secs = v,
                     },
                 ),
-                item(
+                setting(
+                    "appearance.mouse",
                     "Mouse",
                     "Mouse wheel scrolling and clicking on the lyrics and progress bar. Turn off to keep the terminal's own text selection.",
                     Kind::Toggle {
@@ -763,7 +805,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Lyrics",
             items: vec![
-                item(
+                setting(
+                    "providers.preferSynced",
                     "Prefer synced lyrics",
                     "Ask the providers for the best sync: word sync beats line sync, which beats unsynced lyrics. When several have the same kind, the priority order decides. Off: use the first provider that has any lyrics.",
                     Kind::Toggle {
@@ -771,7 +814,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.providers.prefer_synced = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.romanization",
                     "Romanization",
                     "Show a romanized line under lyrics that have one.",
                     Kind::Toggle {
@@ -779,7 +823,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.romanization = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.translation",
                     "Translation",
                     "Show a translated line under lyrics that have one.",
                     Kind::Toggle {
@@ -787,7 +832,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.translation = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.backgroundVocals",
                     "Background vocals",
                     "Show background vocal lines.",
                     Kind::Toggle {
@@ -795,7 +841,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.background_vocals = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.fixBackgroundLines",
                     "Fix background lines",
                     "On word-synced lyrics without background vocals, move words in parentheses into a background line.",
                     Kind::Toggle {
@@ -803,7 +850,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.fix_background_lines = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.interludes",
                     "Interlude dots",
                     "Show animated dots during instrumental breaks.",
                     Kind::Toggle {
@@ -811,7 +859,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.interludes = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.interludeThresholdSecs",
                     "Interlude threshold",
                     "The shortest gap between lines that counts as an instrumental break.",
                     Kind::Number {
@@ -824,7 +873,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.interlude_threshold_secs = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.reserveInterludeSpace",
                     "Reserve interlude space",
                     "Keep an empty line for the interlude dots at all times instead of pushing the lines below away when they appear.",
                     Kind::Toggle {
@@ -832,7 +882,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.lyrics.reserve_interlude_space = v,
                     },
                 ),
-                item(
+                setting(
+                    "lyrics.joinSplitWords",
                     "Join split words",
                     "Merge syllables of one word into a single unit for a smoother wipe.",
                     Kind::Toggle {
@@ -845,7 +896,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Sync",
             items: vec![
-                item(
+                setting(
+                    "sync.offsetMs",
                     "Global offset",
                     "Shifts every song's lyrics. Positive shows lines earlier. Per-track offsets ([ and ]) add to this.",
                     Kind::Number {
@@ -858,7 +910,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.sync.offset_ms = v as i64,
                     },
                 ),
-                item(
+                setting(
+                    "sync.smoothing",
                     "Smoothing",
                     "Glide small position corrections from the player instead of jumping.",
                     Kind::Toggle {
@@ -866,7 +919,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.sync.smoothing = v,
                     },
                 ),
-                item(
+                setting(
+                    "sync.snapThresholdMs",
                     "Snap threshold",
                     "Corrections larger than this jump immediately, such as after a seek.",
                     Kind::Number {
@@ -884,7 +938,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Controls",
             items: vec![
-                item(
+                setting(
+                    "controls.enabled",
                     "Playback controls",
                     "Let Lyrminal play, pause, seek and skip through the system media interface. Off keeps it read-only.",
                     Kind::Toggle {
@@ -892,7 +947,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.controls.enabled = v,
                     },
                 ),
-                item(
+                setting(
+                    "controls.seekStepSecs",
                     "Seek step",
                     "How far h / l and the arrow keys seek.",
                     Kind::Number {
@@ -905,7 +961,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.controls.seek_step_secs = v as u32,
                     },
                 ),
-                item(
+                setting(
+                    "controls.rememberSettings",
                     "Remember settings position",
                     "Reopening settings soon after closing them lands on the same tab and setting you left. Off always starts at the top.",
                     Kind::Toggle {
@@ -913,7 +970,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.controls.remember_settings = v,
                     },
                 ),
-                item(
+                setting(
+                    "controls.rememberSettingsSecs",
                     "Remember position for",
                     "How long after closing settings they reopen where you left them.",
                     Kind::Number {
@@ -931,7 +989,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
         Section {
             title: "Cache",
             items: vec![
-                item(
+                setting(
+                    "cache.enabled",
                     "Cache lyrics",
                     "Keep fetched lyrics on disk so repeat plays need no requests.",
                     Kind::Toggle {
@@ -939,7 +998,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.cache.enabled = v,
                     },
                 ),
-                item(
+                setting(
+                    "cache.ttlDays",
                     "Keep cached lyrics for",
                     "Cached lyrics are refetched after this. Spicy Lyrics' terms cap storage at 30 days.",
                     Kind::Number {
@@ -959,7 +1019,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
             title: UPDATES_SECTION,
             items: vec![
                 item(UPDATE_LABEL, "", Kind::Action(SettingsAction::Update)),
-                item(
+                setting(
+                    "updates.check",
                     "Check for updates",
                     "Look for a new release on GitHub when Lyrminal starts and every 12 hours while it runs. Nothing is downloaded unless you install it or turn on automatic installs.",
                     Kind::Toggle {
@@ -967,7 +1028,8 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
                         set: |c, v| c.updates.check = v,
                     },
                 ),
-                item(
+                setting(
+                    "updates.autoInstall",
                     "Install updates automatically",
                     "Download and install a new release as soon as it is found. It takes over the next time Lyrminal starts, or right away if you restart from here.",
                     Kind::Toggle {
@@ -1009,6 +1071,18 @@ fn all_sections(cfg: &Config, pixel: bool) -> Vec<Section> {
             ],
         },
     ]
+}
+
+pub fn keyed_items() -> Vec<(String, Item)> {
+    let cfg = Config::default();
+    let mut out = Vec::new();
+    for s in all_sections(&cfg, true) {
+        out.extend(s.items.into_iter().filter(|i| !i.key.is_empty()).map(|i| (s.title.to_string(), i)));
+    }
+    for p in crate::providers::KNOWN_PROVIDERS {
+        out.extend(provider_page(p.id).into_iter().filter(|i| !i.key.is_empty()).map(|i| (p.name.to_string(), i)));
+    }
+    out
 }
 
 pub fn value_text(cfg: &Config, kind: &Kind) -> String {
