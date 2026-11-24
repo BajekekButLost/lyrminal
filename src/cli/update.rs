@@ -1,0 +1,83 @@
+use std::io::Write;
+
+use clap::Args;
+
+use crate::update::{self, CURRENT, Release};
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    #[arg(short, long, help = "Install without asking")]
+    pub yes: bool,
+}
+
+fn progress(done: u64, total: u64) {
+    if total > 0 {
+        eprint!("\rDownloading {}%", (done * 100 / total).min(100));
+    } else {
+        eprint!("\rDownloading {} KB", done / 1024);
+    }
+    let _ = std::io::stderr().flush();
+}
+
+fn ask(release: &Release, yes: bool) -> bool {
+    if yes {
+        return true;
+    }
+    if super::stdin_piped() {
+        super::fail("pass -y to install without being asked");
+    }
+    super::confirm(&format!("Install Lyrminal v{}?", release.version))
+}
+
+async fn install_binary(client: &reqwest::Client, release: &Release) -> Result<std::path::PathBuf, String> {
+    let mut shown = None;
+    let result = update::install(client, release, |done, total| {
+        let pct = (total > 0).then(|| done * 100 / total);
+        if pct != shown || total == 0 {
+            shown = pct;
+            progress(done, total);
+        }
+    })
+    .await;
+    eprintln!();
+    result
+}
+
+fn describe(release: &Release) {
+    println!("Lyrminal v{} is out (you have v{CURRENT})", release.version);
+    if !release.summary.is_empty() {
+        println!("{}", release.summary);
+    }
+    println!("Release notes: {}", release.url);
+}
+
+pub async fn run(args: UpdateArgs) -> i32 {
+    if let Err(e) = update::install_path() {
+        super::fail(e);
+    }
+    let client = crate::providers::http_client();
+    let release = match update::check(&client).await {
+        Ok(Some(r)) => r,
+        Ok(None) => {
+            println!("Lyrminal v{CURRENT} is up to date");
+            return 0;
+        }
+        Err(e) => super::fail(format!("could not check for updates: {e}")),
+    };
+    describe(&release);
+    if release.asset.is_none() {
+        super::fail("there is no prebuilt binary for this system");
+    }
+    if !ask(&release, args.yes) {
+        println!("Nothing was installed");
+        return 1;
+    }
+    match install_binary(&client, &release).await {
+        Ok(path) => {
+            println!("Installed Lyrminal v{} at {}", release.version, path.display());
+            println!("A running Lyrminal keeps the old version until you restart it");
+            0
+        }
+        Err(e) => super::fail(format!("the update failed: {e}")),
+    }
+}

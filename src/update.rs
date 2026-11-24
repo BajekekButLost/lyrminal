@@ -191,8 +191,16 @@ fn release_from(gh: GhRelease, target: Option<&str>) -> Option<Release> {
 }
 
 pub async fn check(client: &reqwest::Client) -> Result<Option<Release>, String> {
+    Ok(fetch(client, None).await?.filter(|r| is_newer(&r.version, CURRENT)))
+}
+
+pub async fn fetch(client: &reqwest::Client, tag: Option<&str>) -> Result<Option<Release>, String> {
+    let which = match tag {
+        Some(t) => format!("tags/{t}"),
+        None => "latest".into(),
+    };
     let resp = client
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        .get(format!("https://api.github.com/repos/{REPO}/releases/{which}"))
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
@@ -209,7 +217,7 @@ pub async fn check(client: &reqwest::Client) -> Result<Option<Release>, String> 
         return Err(format!("GitHub answered {status}"));
     }
     let gh: GhRelease = resp.json().await.map_err(|e| format!("unexpected answer from GitHub ({e})"))?;
-    Ok(release_from(gh, target()).filter(|r| is_newer(&r.version, CURRENT)))
+    Ok(release_from(gh, target()))
 }
 
 pub fn install_path() -> Result<PathBuf, String> {

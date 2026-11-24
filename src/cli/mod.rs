@@ -3,6 +3,7 @@ mod now_playing;
 mod paths;
 mod providers;
 mod settings;
+mod update;
 
 use clap::{Args, Parser, Subcommand};
 
@@ -59,6 +60,8 @@ pub enum Command {
     NowPlaying(now_playing::NowPlayingArgs),
     #[command(about = "Add, list, change and remove the syncs in the local library")]
     Library(library::LibraryArgs),
+    #[command(about = "Check for a new release and install it")]
+    Update(update::UpdateArgs),
 }
 
 pub fn non_empty(s: &str) -> Result<String, String> {
@@ -164,5 +167,6 @@ pub async fn run(command: Command) -> i32 {
         Command::Providers(args) => providers::run(args),
         Command::NowPlaying(args) => now_playing::run(args).await,
         Command::Library(args) => library::run(args).await,
+        Command::Update(args) => update::run(args).await,
     }
 }
