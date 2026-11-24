@@ -14,10 +14,15 @@ pub struct UpdateArgs {
     pub from_source: bool,
     #[arg(long = "version", value_name = "vX.Y.Z", conflicts_with = "check", help = "Install this release instead of the latest, even an older one")]
     pub version: Option<String>,
+    #[arg(long, conflicts_with = "check", help = "Install even when that version is already installed")]
+    pub force: bool,
 }
 
 async fn pick(client: &reqwest::Client, args: &UpdateArgs) -> Result<Option<Release>, String> {
     let Some(v) = &args.version else {
+        if args.force {
+            return update::fetch(client, None).await;
+        }
         return update::check(client).await;
     };
     let tag = format!("v{}", v.trim().trim_start_matches(['v', 'V']));
@@ -25,7 +30,7 @@ async fn pick(client: &reqwest::Client, args: &UpdateArgs) -> Result<Option<Rele
         return Err(format!("“{v}” is not a version like v1.2.3"));
     }
     match update::fetch(client, Some(&tag)).await? {
-        Some(r) if r.version == CURRENT => {
+        Some(r) if r.version == CURRENT && !args.force => {
             println!("Lyrminal v{CURRENT} is already installed");
             Ok(None)
         }
@@ -92,6 +97,8 @@ async fn install_binary(client: &reqwest::Client, release: &Release) -> Result<s
 fn describe(release: &Release) {
     if update::is_newer(&release.version, CURRENT) {
         println!("Lyrminal v{} is out (you have v{CURRENT})", release.version);
+    } else if release.version == CURRENT {
+        println!("Lyrminal v{CURRENT} again");
     } else {
         println!("Lyrminal v{} (you have v{CURRENT})", release.version);
     }
@@ -112,6 +119,7 @@ pub async fn run(args: UpdateArgs) -> i32 {
     let release = match pick(&client, &args).await {
         Ok(Some(r)) => r,
         Ok(None) if args.version.is_some() => return 0,
+        Ok(None) if args.force => super::fail("there is no release yet"),
         Ok(None) => {
             println!("Lyrminal v{CURRENT} is up to date");
             return 0;
