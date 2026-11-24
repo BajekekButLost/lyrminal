@@ -222,14 +222,35 @@ fn move_provider(args: MoveArgs) -> i32 {
     0
 }
 
-pub fn order_from(names: &[String]) -> Result<Vec<String>, String> {
-    let mut ids: Vec<String> = Vec::new();
-    for name in names.iter().flat_map(|n| n.split([',', ' '])).map(str::trim).filter(|n| !n.is_empty()) {
-        let id = resolve(name)?.id.to_string();
-        if ids.contains(&id) {
-            return Err(format!("{id} is listed twice"));
+fn resolve_part(part: &str, out: &mut Vec<&'static ProviderInfo>) -> Result<(), String> {
+    match resolve(part) {
+        Ok(p) => out.push(p),
+        Err(e) if part.contains(char::is_whitespace) => {
+            let words: Result<Vec<_>, _> = part.split_whitespace().map(resolve).collect();
+            out.extend(words.map_err(|_| e)?);
         }
-        ids.push(id);
+        Err(e) => return Err(e),
+    }
+    Ok(())
+}
+
+pub fn order_from(names: &[String]) -> Result<Vec<String>, String> {
+    let mut found = Vec::new();
+    for name in names.iter().map(|n| n.trim()).filter(|n| !n.is_empty()) {
+        if let Ok(p) = resolve(name) {
+            found.push(p);
+            continue;
+        }
+        for part in name.split(',').map(str::trim).filter(|n| !n.is_empty()) {
+            resolve_part(part, &mut found)?;
+        }
+    }
+    let mut ids: Vec<String> = Vec::new();
+    for p in found {
+        if ids.iter().any(|id| id == p.id) {
+            return Err(format!("{} is listed twice", p.id));
+        }
+        ids.push(p.id.to_string());
     }
     if ids.is_empty() {
         return Err("give the providers in the order they should be tried".into());
@@ -403,6 +424,11 @@ mod tests {
         cfg.providers.order = order;
         assert_eq!(ordered_ids(&cfg), vec!["local-library", "lrclib", "spicy-lyrics", "unison", "lrcmux", "lrc-red"]);
         assert!(order_from(&["lrclib".into(), "LRCLIB".into()]).is_err());
+        assert_eq!(
+            order_from(&["Better Lyrics".into(), "Spicy Lyrics, Local library".into(), "lrclib lrcmux".into()]).unwrap(),
+            vec!["unison", "spicy-lyrics", "local-library", "lrclib", "lrcmux"]
+        );
+        assert!(order_from(&["Spicy Nonsense".into()]).is_err());
         assert!(order_from(&[]).is_err());
     }
 
