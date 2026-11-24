@@ -23,6 +23,28 @@ pub enum LibraryCommand {
     Show(ShowArgs),
     #[command(about = "Save a sync from a file, a URL or stdin; it is for the playing song unless you give --title")]
     Add(AddArgs),
+    #[command(about = "Change a saved sync: its song, source, format or whether it checks for changes")]
+    Update(UpdateArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct UpdateArgs {
+    #[arg(help = "The sync's id, or the start of it (see library list)")]
+    pub id: String,
+    #[arg(long, value_name = "FILE|URL|-", help = "Take the lyrics from this file or URL from now on; - reads new lyrics from stdin")]
+    pub source: Option<String>,
+    #[command(flatten)]
+    pub track: TrackArgs,
+    #[arg(long, value_name = "FORMAT", help = "The lyrics format, or auto to detect it")]
+    pub format: Option<String>,
+    #[arg(long, value_name = "on|off", value_parser = parse_on_off, help = "Whether to re-read the file or URL every time the sync loads")]
+    pub watch: Option<bool>,
+    #[arg(long, conflicts_with = "source", help = "Read the file or URL again now and update the saved copy")]
+    pub refresh: bool,
+}
+
+fn parse_on_off(s: &str) -> Result<bool, String> {
+    crate::setting_keys::parse_bool(s).ok_or_else(|| format!("“{s}” is not on or off"))
 }
 
 #[derive(Args, Debug, Default)]
@@ -370,11 +392,70 @@ fn show(args: ShowArgs) -> i32 {
     0
 }
 
+async fn update(args: UpdateArgs) -> i32 {
+    let lib = Library::default();
+    let old = find(&lib, &args.id);
+    let client = crate::providers::http_client();
+    let mut entry = old.clone();
+    let text = match args.source.as_deref() {
+        Some(s) => {
+            entry.source = source_for(Some(s)).unwrap_or_else(|e| super::fail(e));
+            match &entry.source {
+                Source::Stdin => super::read_stdin(),
+                src => crate::library::read_source(src, &client).await.unwrap_or_else(|e| super::fail(e)),
+            }
+        }
+        None if args.refresh => {
+            if !entry.source.can_watch() {
+                super::fail(format!("this sync came from {}, so there is nothing to read again", entry.source.label()));
+            }
+            crate::library::read_source(&entry.source, &client).await.unwrap_or_else(|e| super::fail(e))
+        }
+        None => lib.read_copy(&old).unwrap_or_else(|e| super::fail(format!("the saved copy is missing ({e})"))),
+    };
+    if text.len() > crate::library::MAX_BYTES {
+        super::fail("the lyrics are larger than 8 MB");
+    }
+    args.track.apply(&mut entry.track);
+    if entry.track.title.trim().is_empty() {
+        super::fail("the title can't be empty");
+    }
+    if let Some(f) = &args.format {
+        entry.format = if f.eq_ignore_ascii_case("auto") { None } else { Some(parse_format(f).unwrap_or_else(|e| super::fail(e))) };
+    }
+    if let Some(w) = args.watch {
+        entry.watch = w;
+    }
+    entry.watch = entry.watch && entry.source.can_watch();
+    let (lyrics, detected) = crate::library::parse(&text, &entry.source, entry.format, entry.track.duration).unwrap_or_else(|e| super::fail(e));
+    entry.detected = Some(detected);
+    entry.kind = Some(lyrics.kind);
+    entry.key = entry.track.key();
+    entry.id = Library::id_for(&entry.key);
+    entry.updated_at = crate::library::now();
+    let moved = entry.id != old.id;
+    if moved && let Some(other) = lib.get(&entry.id) {
+        super::fail(format!("another sync ({}) is already saved for that song", &other.id[..SHORT_ID]));
+    }
+    if moved && let Err(e) = lib.remove(&old.id) {
+        super::fail(format!("could not update the library: {e}"));
+    }
+    let saved = lib.put(entry, &text).unwrap_or_else(|e| super::fail(format!("could not save the lyrics: {e}")));
+    println!("Updated {} as {} ({})", describe(&saved.track), &saved.id[..SHORT_ID], saved.summary());
+    super::library_changed(LibraryChange {
+        added: if moved { vec![saved.key.clone()] } else { Vec::new() },
+        changed: vec![saved.id.clone()],
+        removed: if moved { vec![old.id] } else { Vec::new() },
+    });
+    0
+}
+
 pub async fn run(args: LibraryArgs) -> i32 {
     match args.command {
         LibraryCommand::List(a) => list(a),
         LibraryCommand::Show(a) => show(a),
         LibraryCommand::Add(a) => add(a).await,
+        LibraryCommand::Update(a) => update(a).await,
     }
 }
 
