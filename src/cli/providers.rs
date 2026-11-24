@@ -17,6 +17,8 @@ pub enum ProvidersCommand {
     List(ListArgs),
     #[command(about = "Turn providers on; ids can also come from stdin")]
     Enable(IdsArgs),
+    #[command(about = "Turn providers off; ids can also come from stdin")]
+    Disable(IdsArgs),
 }
 
 #[derive(Args, Debug)]
@@ -53,9 +55,18 @@ pub fn json_name(id: &str) -> String {
 
 pub fn resolve(name: &str) -> Result<&'static ProviderInfo, String> {
     let want = plain(name);
+    let names = |p: &ProviderInfo| [plain(p.id), plain(p.name), plain(&json_name(p.id))];
+    let prefixed: Vec<&'static ProviderInfo> = KNOWN_PROVIDERS
+        .iter()
+        .filter(|p| !want.is_empty() && names(p).iter().any(|n| n.starts_with(&want)))
+        .collect();
     KNOWN_PROVIDERS
         .iter()
-        .find(|p| plain(p.id) == want || plain(p.name) == want || plain(&json_name(p.id)) == want)
+        .find(|p| names(p).contains(&want))
+        .or(match prefixed.as_slice() {
+            [p] => Some(*p),
+            _ => None,
+        })
         .ok_or_else(|| {
             format!(
                 "unknown provider “{name}”, use one of {}",
@@ -120,6 +131,7 @@ pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
         ProvidersCommand::Enable(a) => set_enabled(a, true),
+        ProvidersCommand::Disable(a) => set_enabled(a, false),
     }
 }
 
@@ -135,6 +147,8 @@ mod tests {
         assert_eq!(resolve("LRCLIB").unwrap().id, "lrclib");
         assert_eq!(resolve("better-lyrics").unwrap().id, "unison");
         assert!(resolve("genius").is_err());
+        assert_eq!(resolve("spicy").unwrap().id, "spicy-lyrics");
+        assert!(resolve("lrc").is_err());
         assert_eq!(json_name("local-library"), "localLibrary");
         assert_eq!(json_name("lrcmux"), "lrcmux");
     }
