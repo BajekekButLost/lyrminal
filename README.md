@@ -29,6 +29,7 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Quick start](#quick-start)
+- [Command line](#command-line)
 - [Key bindings](#key-bindings)
 - [How lyrics are picked](#how-lyrics-are-picked)
 - [Lyrics providers](#lyrics-providers)
@@ -63,6 +64,7 @@ Synced lyrics in your terminal. Lyrminal follows whatever your MPRIS player is p
 - **In-app settings** for everything, plus a short welcome tour on first launch.
 - **Cached lyrics**, so repeat plays need no requests.
 - **In-app updates**: get told about new releases and install them without leaving Lyrminal.
+- **Command line**: change settings, providers and the local library from a shell, show what's playing in a status bar, start with temporary settings and update, all with `lyrminal <command>`. See [CLI.md](CLI.md).
 
 ## Requirements
 
@@ -130,6 +132,8 @@ Lyrminal looks for a new release on GitHub when it starts and every 12 hours whi
 
 In-app updates need a prebuilt binary for your system (Linux x86_64) and write access to the folder Lyrminal is in. Builds running from a `cargo build` `target/` folder don't update themselves; pull and rebuild them instead.
 
+From a shell, `lyrminal update` does the same, and `lyrminal update --from-source` builds the release on your machine with `cargo` instead. It also works where there's no prebuilt binary. See [CLI.md](CLI.md#lyrminal-update) for its options.
+
 ## Quick start
 
 1. Start your music player and play something.
@@ -146,18 +150,25 @@ In-app updates need a prebuilt binary for your system (Linux x86_64) and write a
    You can skip it at any time and run it again from Settings → About → Welcome tour.
 4. Press `Esc` for settings and `?` for every key.
 
+## Command line
+
 ```text
-Usage: lyrminal [options]
+lyrminal [options]             start the app
+lyrminal <command> [options]   change Lyrminal from a shell
 ```
 
-| Option | What it does |
-| --- | --- |
-| `-h`, `--help` | Show the options and where the config file is |
-| `-V`, `--version` | Show the version |
-| `--base-directory <dir>` | Use `<dir>` as the home folder for Lyrminal's files, so they go to `<dir>/.config/lyrminal`, `<dir>/.cache/lyrminal` and so on. The folder is created if it doesn't exist |
-| `--temp-base-directory` | The same, in a new randomly named folder in the system temp directory. Its path is printed when you quit, and it is not deleted |
+Commands:
 
-Everything else is set inside the app.
+- `settings`: read and change the settings.
+- `providers`: order, turn on/off and configure the lyrics providers.
+- `library`: add, list, change, remove and use the syncs in your local library.
+- `now-playing`: print what's playing and the line being sung, once or continuously for status bars.
+- `update`: install the latest release, or build it from source.
+- `paths`: show where Lyrminal keeps its files.
+
+Options choose other locations for the config file, the state file, the cache and the library (`--config`, `--state-file`, `--cache-dir`, `--library-dir`, `--base-directory`). Others start the app with temporary settings that are locked in the app and never saved (`--set`, `--renderer`, `--style`, `--preset`, `--player`, `--offset`, `--no-controls`).
+
+Every command, option and output format is described in **[CLI.md](CLI.md)**. `lyrminal --help` and `lyrminal <command> --help` list them too.
 
 ## Key bindings
 
@@ -327,8 +338,11 @@ Press `p` to pick from the players that are running right now.
 | `~/.local/state/lyrminal/state.json` | Per-track offsets, chosen syncs and the welcome tour status |
 | `~/.cache/lyrminal/` | Cached lyrics and lookups |
 | `~/.local/share/lyrminal/library/` | Your saved syncs: an `index.json` plus a copy of each file in its original format |
+| `$XDG_RUNTIME_DIR/lyrminal.sock` | The socket the running app answers `lyrminal` commands on |
 
-The paths follow your `XDG_*` directories when those are set. With `--base-directory <dir>` or `--temp-base-directory`, they go under that folder instead (`<dir>/.config/lyrminal/config.json`, `<dir>/.local/state/lyrminal/state.json` and so on), which is handy for trying a fresh install without touching your own settings. Settings are best changed in the app, but the file is plain JSON. Settings → About → Reset all settings restores every default, including API keys.
+The paths follow your `XDG_*` directories when those are set. With `--base-directory <dir>` or `--temp-base-directory`, they go under that folder instead (`<dir>/.config/lyrminal/config.json`, `<dir>/.local/state/lyrminal/state.json` and so on), which is handy for trying a fresh install without touching your own settings. Each path can also be moved on its own; see [CLI.md](CLI.md#global-options). `lyrminal paths` prints where they are.
+
+Settings are best changed in the app or with `lyrminal settings`, but the file is plain JSON. The app picks up edits to it as soon as you save them, unless you turn off Settings → About → Live reload config. Settings → About → Reset all settings restores every default, including API keys.
 
 **Cache:** fetched lyrics are kept for 7 days by default (Settings → Cache, at most 30 because of Spicy Lyrics' terms). You can turn the cache off or clear it there.
 
