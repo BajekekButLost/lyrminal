@@ -7,6 +7,21 @@ use crate::ipc::{self, Request};
 pub struct NowPlayingArgs {
     #[arg(short, long, value_name = "TEXT", help = "Put TEXT between the fields instead of \" · \"")]
     pub separator: Option<String>,
+    #[arg(
+        short,
+        long,
+        value_enum,
+        value_delimiter = ',',
+        value_name = "FIELD,...",
+        help = "Print these fields, in this order"
+    )]
+    pub fields: Vec<Field>,
+}
+
+impl NowPlayingArgs {
+    fn fields(&self) -> Vec<Field> {
+        if self.fields.is_empty() { COMPACT.to_vec() } else { self.fields.clone() }
+    }
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
@@ -90,7 +105,7 @@ pub async fn run(args: NowPlayingArgs) -> i32 {
     let separator = args.separator.as_deref().unwrap_or(" · ");
     match ipc::call(&Request::NowPlaying).await {
         Ok(data) => {
-            println!("{}", render(&data, COMPACT, separator));
+            println!("{}", render(&data, &args.fields(), separator));
             0
         }
         Err(e) => {
