@@ -30,6 +30,8 @@ pub struct GlobalArgs {
     pub config: Option<String>,
     #[arg(long, global = true, value_name = "FILE", value_parser = non_empty, help = "Keep per-track offsets, chosen syncs and the tour status in FILE instead of state.json")]
     pub state_file: Option<String>,
+    #[arg(long, global = true, value_name = "DIR", value_parser = non_empty, help = "Keep cached lyrics and lookups in DIR")]
+    pub cache_dir: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]

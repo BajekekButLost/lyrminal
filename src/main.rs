@@ -55,6 +55,17 @@ fn setup_base(global: &cli::GlobalArgs) {
     if let Some(file) = &global.state_file {
         config::set_state_file(file_arg("--state-file", file));
     }
+    if let Some(dir) = &global.cache_dir {
+        config::set_cache_dir(dir_arg("--cache-dir", dir));
+    }
+}
+
+fn dir_arg(flag: &str, value: &str) -> std::path::PathBuf {
+    let path = library::expand_path(value);
+    if path.exists() && !path.is_dir() {
+        cli::fail(format!("{flag} needs a folder, {} is a file", path.display()));
+    }
+    path
 }
 
 fn file_arg(flag: &str, value: &str) -> std::path::PathBuf {
