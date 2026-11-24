@@ -39,11 +39,16 @@ pub struct LaunchArgs {
     pub renderer: Option<String>,
     #[arg(long, value_name = "spring|bloom", help = "Use this animation style for this session")]
     pub style: Option<String>,
+    #[arg(long, value_name = "lyrminal|spicy-lyrics", help = "Use this look preset for this session")]
+    pub preset: Option<String>,
 }
 
 impl LaunchArgs {
     fn shortcuts(&self) -> Vec<(&'static str, &'static str, String)> {
         let mut out = Vec::new();
+        if let Some(v) = &self.preset {
+            out.push(("--preset", crate::ui::settings::PRESET_KEY, v.clone()));
+        }
         if let Some(v) = &self.renderer {
             out.push(("--renderer", "appearance.renderer", v.clone()));
         }
