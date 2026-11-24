@@ -14,6 +14,16 @@ pub struct SettingsArgs {
 pub enum SettingsCommand {
     #[command(about = "List every setting with its key and value, grouped like the settings tabs")]
     List(ListArgs),
+    #[command(about = "Print the value of a setting")]
+    Get(GetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct GetArgs {
+    #[arg(help = "The setting's key, e.g. appearance.fontScale")]
+    pub key: String,
+    #[arg(long, help = "Show secret values such as API keys instead of masking them")]
+    pub reveal: bool,
 }
 
 #[derive(Args, Debug)]
@@ -85,8 +95,23 @@ fn list(args: ListArgs) -> i32 {
     0
 }
 
+pub fn find(key: &str) -> Setting {
+    let s = setting_keys::find(key).unwrap_or_else(|e| super::fail(e));
+    if s.is_provider() {
+        super::fail(format!("{} is a provider setting, use lyrminal providers", s.key()));
+    }
+    s
+}
+
+fn get(args: GetArgs) -> i32 {
+    let s = find(&args.key);
+    println!("{}", setting_keys::value(&super::load_config(), &s.item, args.reveal));
+    0
+}
+
 pub fn run(args: SettingsArgs) -> i32 {
     match args.command {
         SettingsCommand::List(a) => list(a),
+        SettingsCommand::Get(a) => get(a),
     }
 }
