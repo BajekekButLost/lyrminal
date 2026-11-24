@@ -41,6 +41,8 @@ pub struct LaunchArgs {
     pub style: Option<String>,
     #[arg(long, value_name = "lyrminal|spicy-lyrics", help = "Use this look preset for this session")]
     pub preset: Option<String>,
+    #[arg(long, value_name = "NAME", value_parser = non_empty, help = "Only follow this player for this session: a process name, MPRIS bus name or player identity")]
+    pub player: Option<String>,
 }
 
 impl LaunchArgs {
@@ -54,6 +56,10 @@ impl LaunchArgs {
         }
         if let Some(v) = &self.style {
             out.push(("--style", "appearance.style", v.clone()));
+        }
+        if let Some(v) = &self.player {
+            out.push(("--player", "player.mode", "fixed".into()));
+            out.push(("--player", "player.target", v.clone()));
         }
         out
     }
