@@ -256,7 +256,10 @@ fn edit() -> i32 {
         super::fail(format!("{program} exited with {status}"));
     }
     match Config::load() {
-        Ok(_) => 0,
+        Ok(_) => {
+            let _ = super::tell_app(&crate::ipc::Request::ReloadConfig);
+            0
+        }
         Err(e) => {
             eprintln!("lyrminal: {e:#}");
             eprintln!("Run lyrminal settings edit again to fix it.");
