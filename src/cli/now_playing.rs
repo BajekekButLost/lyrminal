@@ -22,6 +22,21 @@ pub struct NowPlayingArgs {
     pub raw: bool,
     #[arg(long, conflicts_with = "raw", help = "Print a JSON object with every field, or only those given with --fields")]
     pub json: bool,
+    #[arg(long, help = "Print nothing and exit with code 3 when nothing is playing or there are no lyrics")]
+    pub strict: bool,
+}
+
+pub const EMPTY_EXIT: i32 = 3;
+
+pub fn empty_reason(data: &Value) -> Option<String> {
+    let status = data["status"].as_str().unwrap_or("");
+    if !matches!(status, "playing" | "paused") {
+        return Some(if status.is_empty() { "nothing is playing".into() } else { format!("nothing is playing ({status})") });
+    }
+    match data["lyrics"].as_str().unwrap_or("") {
+        "ready" => None,
+        state => Some(format!("there are no lyrics ({state})")),
+    }
 }
 
 impl NowPlayingArgs {
@@ -172,6 +187,12 @@ impl NowPlayingArgs {
 pub async fn run(args: NowPlayingArgs) -> i32 {
     match ipc::call(&Request::NowPlaying).await {
         Ok(data) => {
+            if args.strict
+                && let Some(reason) = empty_reason(&data)
+            {
+                eprintln!("lyrminal: {reason}");
+                return EMPTY_EXIT;
+            }
             println!("{}", args.line(&data));
             0
         }
@@ -207,5 +228,8 @@ mod tests {
         let picked = to_json(&json!({"ok": true, "title": "T", "position": 1.0, "length": 2.0, "text": "x"}), &[Field::Time, Field::Title]);
         assert_eq!(picked, json!({"title": "T", "position": 1.0, "length": 2.0}));
         assert_eq!(to_json(&json!({"ok": true, "text": "x"}), &[]), json!({"text": "x"}));
+        assert_eq!(empty_reason(&json!({"status": "playing", "lyrics": "ready"})), None);
+        assert!(empty_reason(&json!({"status": "paused", "lyrics": "not found"})).is_some());
+        assert!(empty_reason(&json!({"status": "no player", "lyrics": "no player"})).is_some());
     }
 }
