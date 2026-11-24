@@ -12,6 +12,24 @@ use tokio::sync::{mpsc, oneshot};
 pub enum Request {
     NowPlaying,
     ReloadConfig,
+    LibraryChanged(LibraryChange),
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LibraryChange {
+    pub added: Vec<String>,
+    pub changed: Vec<String>,
+    pub removed: Vec<String>,
+}
+
+impl LibraryChange {
+    pub fn forget_choices(&self, choices: &mut std::collections::HashMap<String, crate::providers::Candidate>) -> bool {
+        let local = crate::providers::local::ID;
+        let before = choices.len();
+        choices.retain(|key, c| !self.added.contains(key) && !(c.provider == local && self.removed.contains(&c.id)));
+        choices.len() != before
+    }
 }
 
 pub struct Incoming {

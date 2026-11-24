@@ -1,8 +1,13 @@
 use clap::{Args, Subcommand};
 use serde_json::json;
 
-use crate::library::{Entry, Library};
+use crate::app::LibraryDone;
+use crate::ipc::LibraryChange;
+use crate::library::{Entry, Library, Source};
+use crate::lyrics::formats::Format;
+use crate::providers::TrackQuery;
 use crate::setting_keys::normalize;
+use crate::ui::library::ImportRequest;
 
 #[derive(Args, Debug)]
 pub struct LibraryArgs {
@@ -16,6 +21,164 @@ pub enum LibraryCommand {
     List(ListArgs),
     #[command(about = "Show everything about a saved sync, or print its saved copy")]
     Show(ShowArgs),
+    #[command(about = "Save a sync for a song from a file, a URL or stdin")]
+    Add(AddArgs),
+}
+
+#[derive(Args, Debug, Default)]
+pub struct TrackArgs {
+    #[arg(long, help = "The song's title")]
+    pub title: Option<String>,
+    #[arg(long = "artist", value_name = "NAME", help = "An artist of the song; repeat it for more")]
+    pub artists: Vec<String>,
+    #[arg(long, help = "The song's album")]
+    pub album: Option<String>,
+    #[arg(long, value_name = "LENGTH", value_parser = parse_length, help = "The song's length, in seconds or as m:ss")]
+    pub duration: Option<f64>,
+    #[arg(long, help = "The song's ISRC")]
+    pub isrc: Option<String>,
+    #[arg(long, value_name = "ID", help = "The song's Spotify track id")]
+    pub spotify_id: Option<String>,
+}
+
+#[derive(Args, Debug)]
+pub struct AddArgs {
+    #[arg(value_name = "FILE|URL|-", help = "A lyrics file or an http(s) URL; leave it out or use - to read the lyrics from stdin")]
+    pub source: Option<String>,
+    #[command(flatten)]
+    pub track: TrackArgs,
+    #[arg(long, value_parser = parse_format, help = "The lyrics format instead of detecting it: lrc, ttml, srt, vtt, ass, sbv, sami, json or text")]
+    pub format: Option<Format>,
+    #[arg(long, help = "Don't re-read the file or URL every time the sync loads")]
+    pub no_watch: bool,
+}
+
+pub fn parse_length(s: &str) -> Result<f64, String> {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    let mut total = 0.0;
+    for p in &parts {
+        let n: f64 = p.trim().parse().map_err(|_| format!("“{s}” is not a length like 254 or 4:14"))?;
+        if n < 0.0 || !n.is_finite() {
+            return Err(format!("“{s}” is not a length like 254 or 4:14"));
+        }
+        total = total * 60.0 + n;
+    }
+    if parts.len() > 3 || total <= 0.0 {
+        return Err(format!("“{s}” is not a length like 254 or 4:14"));
+    }
+    Ok(total)
+}
+
+pub fn parse_format(s: &str) -> Result<Format, String> {
+    let want = normalize(s);
+    Format::ALL
+        .into_iter()
+        .find(|f| normalize(f.extension()) == want || normalize(f.label()) == want)
+        .ok_or_else(|| {
+            format!(
+                "“{s}” is not a format, use one of {}",
+                Format::ALL.iter().map(|f| f.extension()).collect::<Vec<_>>().join(", ")
+            )
+        })
+}
+
+impl TrackArgs {
+    fn given(&self) -> bool {
+        self.title.is_some()
+    }
+
+    pub fn apply(&self, q: &mut TrackQuery) {
+        let text = |v: &Option<String>| v.as_ref().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        if let Some(t) = text(&self.title) {
+            q.title = t;
+        }
+        if !self.artists.is_empty() {
+            q.artists = self.artists.iter().map(|a| a.trim().to_string()).filter(|a| !a.is_empty()).collect();
+        }
+        if let Some(a) = &self.album {
+            q.album = text(&Some(a.clone()));
+        }
+        if let Some(d) = self.duration {
+            q.duration = Some(d);
+        }
+        if let Some(i) = &self.isrc {
+            q.isrc = text(&Some(i.clone()));
+        }
+        if let Some(s) = &self.spotify_id {
+            q.spotify_id = text(&Some(s.clone()));
+        }
+    }
+}
+
+async fn track_for(args: &TrackArgs) -> TrackQuery {
+    if !args.given() {
+        super::fail("give the song with --title and --artist");
+    }
+    let mut q = TrackQuery::default();
+    args.apply(&mut q);
+    q
+}
+
+pub fn source_for(arg: Option<&str>) -> Result<Source, String> {
+    match arg.map(str::trim) {
+        None | Some("-") => {
+            if super::stdin_piped() {
+                Ok(Source::Stdin)
+            } else {
+                Err("give a lyrics file or URL, or pipe the lyrics in on stdin".into())
+            }
+        }
+        Some(u) if u.starts_with("http://") || u.starts_with("https://") => Ok(Source::Url(u.to_string())),
+        Some(p) => {
+            let path = crate::library::expand_path(p);
+            if path.is_dir() {
+                Err(format!("{} is a folder", path.display()))
+            } else if !path.exists() {
+                Err(format!("{} doesn't exist", path.display()))
+            } else {
+                Ok(Source::File(path.display().to_string()))
+            }
+        }
+    }
+}
+
+fn describe(q: &TrackQuery) -> String {
+    let artist = q.artist_line();
+    if artist.is_empty() { format!("“{}”", q.title) } else { format!("“{}” by {artist}", q.title) }
+}
+
+async fn add(args: AddArgs) -> i32 {
+    let source = source_for(args.source.as_deref()).unwrap_or_else(|e| super::fail(e));
+    let pasted = (source == Source::Stdin).then(super::read_stdin);
+    let track = track_for(&args.track).await;
+    let req = ImportRequest {
+        track: track.clone(),
+        identity: String::new(),
+        temporary: false,
+        watch: !args.no_watch && source.can_watch(),
+        source,
+        format: args.format,
+        pasted,
+    };
+    let lib = Library::default();
+    let done = crate::app::import(req, crate::providers::http_client(), lib.clone()).await;
+    let (key, warning) = match done {
+        Ok(LibraryDone::Imported { key, warning, .. }) => (key, warning),
+        Ok(_) => super::fail("the sync could not be added"),
+        Err(e) => super::fail(e),
+    };
+    let id = Library::id_for(&key);
+    let summary = lib.get(&id).map(|e| e.summary()).unwrap_or_default();
+    println!("Saved {} as {} ({summary})", describe(&track), &id[..SHORT_ID.min(id.len())]);
+    if let Some(w) = warning {
+        eprintln!("lyrminal: {w}");
+    }
+    super::library_changed(LibraryChange {
+        added: vec![key],
+        changed: vec![id],
+        removed: Vec::new(),
+    });
+    0
 }
 
 #[derive(Args, Debug)]
@@ -159,6 +322,7 @@ pub async fn run(args: LibraryArgs) -> i32 {
     match args.command {
         LibraryCommand::List(a) => list(a),
         LibraryCommand::Show(a) => show(a),
+        LibraryCommand::Add(a) => add(a).await,
     }
 }
 
@@ -188,5 +352,29 @@ mod tests {
         assert_eq!(find_in(&all, "abc").unwrap().id, "abc123");
         assert!(find_in(&all, "ab").unwrap_err().contains("matches 2"));
         assert!(find_in(&all, "zz").is_err());
+    }
+
+    #[test]
+    fn reads_lengths_and_formats() {
+        assert_eq!(parse_length("254"), Ok(254.0));
+        assert_eq!(parse_length("4:14"), Ok(254.0));
+        assert_eq!(parse_length("1:00:00.5"), Ok(3600.5));
+        assert!(parse_length("abc").is_err());
+        assert!(parse_length("0").is_err());
+        assert_eq!(parse_format("TTML"), Ok(Format::Ttml));
+        assert_eq!(parse_format("webvtt"), Ok(Format::Vtt));
+        assert!(parse_format("docx").is_err());
+        let mut q = TrackQuery {
+            title: "Old".into(),
+            artists: vec!["A".into()],
+            ..Default::default()
+        };
+        TrackArgs {
+            album: Some("Album".into()),
+            artists: vec!["B".into(), "C".into()],
+            ..Default::default()
+        }
+        .apply(&mut q);
+        assert_eq!((q.title.as_str(), q.artists.len(), q.album.as_deref()), ("Old", 2, Some("Album")));
     }
 }

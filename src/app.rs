@@ -676,8 +676,31 @@ impl App {
                 Ok(()) => crate::ipc::ok(serde_json::json!({})),
                 Err(e) => crate::ipc::error(e),
             },
+            crate::ipc::Request::LibraryChanged(change) => {
+                self.library_changed(&change);
+                crate::ipc::ok(serde_json::json!({}))
+            }
         };
         let _ = msg.reply.send(answer);
+    }
+
+    fn library_changed(&mut self, change: &crate::ipc::LibraryChange) {
+        if change.forget_choices(&mut self.state.choices) {
+            self.state.save();
+        }
+        let entries = self.library.entries();
+        if let Overlay::Library(d) = &mut self.overlay {
+            d.set_entries(entries);
+        }
+        let local = crate::providers::local::ID;
+        let showing = matches!(&self.lyrics, LyricsState::Ready { resolution, .. }
+            if resolution.candidate.provider == local
+                && (change.changed.contains(&resolution.candidate.id) || change.removed.contains(&resolution.candidate.id)));
+        let added = self.track_key().is_some_and(|k| change.added.contains(&k));
+        if self.track.is_some() && self.temporary.is_none() && (showing || added) {
+            self.schedule_fetch(Duration::ZERO);
+        }
+        self.dirty = true;
     }
 
     pub fn reload_config(&mut self) -> Result<(), String> {
@@ -1261,6 +1284,7 @@ impl App {
             (Source::Clipboard, false) => "Reading the clipboard",
             (Source::File(_), _) => "Reading the file",
             (Source::Url(_), _) => "Downloading",
+            (Source::Stdin, _) => "Reading the lyrics",
         };
         let client = self.client.clone();
         let lib = self.library.clone();
@@ -1941,7 +1965,7 @@ impl App {
     }
 }
 
-async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
+pub async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
     let text = match req.pasted {
         Some(p) => p,
         None => library::read_source(&req.source, &client).await?,

@@ -82,14 +82,28 @@ pub fn save_config(cfg: &Config) {
     if let Err(e) = cfg.save() {
         fail(format!("could not save {}: {e:#}", Config::path().display()));
     }
-    tell_app(&crate::ipc::Request::ReloadConfig);
+    let _ = tell_app(&crate::ipc::Request::ReloadConfig);
 }
 
-pub fn tell_app(request: &crate::ipc::Request) {
-    if let Err(e) = crate::ipc::call_blocking(request)
-        && e != crate::ipc::NOT_RUNNING
-    {
-        eprintln!("lyrminal: saved, but the running app could not take the change: {e}");
+pub fn tell_app(request: &crate::ipc::Request) -> bool {
+    match crate::ipc::call_blocking(request) {
+        Ok(_) => true,
+        Err(e) => {
+            if e != crate::ipc::NOT_RUNNING {
+                eprintln!("lyrminal: saved, but the running app could not take the change: {e}");
+            }
+            false
+        }
+    }
+}
+
+pub fn library_changed(change: crate::ipc::LibraryChange) {
+    if tell_app(&crate::ipc::Request::LibraryChanged(change.clone())) {
+        return;
+    }
+    let mut state = crate::state::State::load();
+    if change.forget_choices(&mut state.choices) {
+        state.save();
     }
 }
 
