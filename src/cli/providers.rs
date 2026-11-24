@@ -3,7 +3,7 @@ use serde_json::json;
 
 use crate::config::Config;
 use crate::providers::{KNOWN_PROVIDERS, ProviderInfo, ordered_ids, provider_name};
-use crate::setting_keys::normalize;
+use crate::setting_keys::{self, Setting, normalize};
 
 #[derive(Args, Debug)]
 pub struct ProvidersArgs {
@@ -23,6 +23,18 @@ pub enum ProvidersCommand {
     Move(MoveArgs),
     #[command(about = "Set the whole priority order; ids can also come from stdin")]
     Order(IdsArgs),
+    #[command(about = "List a provider's options with their values")]
+    Options(OptionsArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct OptionsArgs {
+    #[arg(help = "Provider id or name")]
+    pub provider: String,
+    #[arg(long, help = "Print the options as JSON")]
+    pub json: bool,
+    #[arg(long, help = "Show the API key instead of masking it")]
+    pub reveal: bool,
 }
 
 #[derive(Args, Debug)]
@@ -194,6 +206,51 @@ fn order(args: IdsArgs) -> i32 {
     0
 }
 
+fn prefix(p: &ProviderInfo) -> String {
+    format!("providers.{}.", json_name(p.id))
+}
+
+pub fn options_of(p: &ProviderInfo) -> Vec<Setting> {
+    let prefix = prefix(p);
+    setting_keys::all().into_iter().filter(|s| s.key().starts_with(&prefix)).collect()
+}
+
+pub fn option_name(p: &ProviderInfo, s: &Setting) -> String {
+    s.key().strip_prefix(&prefix(p)).unwrap_or(s.key()).to_string()
+}
+
+pub fn find_option(p: &ProviderInfo, name: &str) -> Result<Setting, String> {
+    let want = normalize(name);
+    let all = options_of(p);
+    let names: Vec<String> = all.iter().map(|s| option_name(p, s)).collect();
+    all.into_iter()
+        .find(|s| normalize(&option_name(p, s)) == want)
+        .ok_or_else(|| format!("{} has no option “{name}”, use one of {}", p.id, names.join(", ")))
+}
+
+fn options(args: OptionsArgs) -> i32 {
+    let p = provider(&args.provider);
+    let cfg = super::load_config();
+    let list = options_of(p);
+    if args.json {
+        super::settings::print_list(&cfg, &list, true, args.reveal);
+        return 0;
+    }
+    let width = list.iter().map(|s| option_name(p, s).len()).max().unwrap_or(0);
+    let defaults = Config::default();
+    for s in &list {
+        let name = option_name(p, s);
+        let value = setting_keys::value(&cfg, &s.item, args.reveal);
+        if setting_keys::is_default(&cfg, &s.item) {
+            println!("{name:<width$}  {value}");
+        } else {
+            let d = setting_keys::value(&defaults, &s.item, args.reveal);
+            println!("{name:<width$}  {value}  (default: {})", if d.is_empty() { "empty" } else { &d });
+        }
+    }
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
@@ -201,6 +258,7 @@ pub fn run(args: ProvidersArgs) -> i32 {
         ProvidersCommand::Disable(a) => set_enabled(a, false),
         ProvidersCommand::Move(a) => move_provider(a),
         ProvidersCommand::Order(a) => order(a),
+        ProvidersCommand::Options(a) => options(a),
     }
 }
 
