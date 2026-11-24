@@ -20,6 +20,16 @@ pub enum SettingsCommand {
     Set(SetArgs),
     #[command(about = "Turn on/off settings the other way; keys can also come from stdin")]
     Toggle(KeysArgs),
+    #[command(about = "Put settings back to their defaults; keys can also come from stdin")]
+    Reset(ResetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct ResetArgs {
+    #[arg(help = "Setting keys; leave them out or use - to read them from stdin, one per line")]
+    pub keys: Vec<String>,
+    #[arg(long, conflicts_with = "keys", help = "Reset every setting except the provider settings")]
+    pub all: bool,
 }
 
 #[derive(Args, Debug)]
@@ -161,11 +171,30 @@ fn toggle(args: KeysArgs) -> i32 {
     0
 }
 
+fn reset(args: ResetArgs) -> i32 {
+    if args.all {
+        let mut cfg = super::load_config();
+        for s in settings() {
+            setting_keys::reset(&mut cfg, &s.item);
+        }
+        super::save_config(&cfg);
+        println!("Every setting except the provider settings is back to its default");
+        return 0;
+    }
+    let list: Vec<Setting> = super::read_list(args.keys, "setting key").iter().map(|k| find(k)).collect();
+    change_many(&list, |cfg, s| {
+        setting_keys::reset(cfg, &s.item);
+        Ok(())
+    });
+    0
+}
+
 pub fn run(args: SettingsArgs) -> i32 {
     match args.command {
         SettingsCommand::List(a) => list(a),
         SettingsCommand::Get(a) => get(a),
         SettingsCommand::Set(a) => set(a),
         SettingsCommand::Toggle(a) => toggle(a),
+        SettingsCommand::Reset(a) => reset(a),
     }
 }
