@@ -85,6 +85,9 @@ async fn main() -> Result<()> {
     let args = cli::Cli::parse();
     setup_base(&args.global);
     if let Some(command) = args.command {
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
         let code = cli::run(command).await;
         std::process::exit(code);
     }

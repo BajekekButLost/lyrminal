@@ -1,6 +1,9 @@
 mod paths;
+mod settings;
 
 use clap::{Args, Parser, Subcommand};
+
+use crate::config::Config;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -43,6 +46,8 @@ pub struct GlobalArgs {
 pub enum Command {
     #[command(about = "Show where Lyrminal keeps its files")]
     Paths(paths::PathsArgs),
+    #[command(about = "Read and change the settings (everything except the lyrics providers)")]
+    Settings(settings::SettingsArgs),
 }
 
 pub fn non_empty(s: &str) -> Result<String, String> {
@@ -58,8 +63,13 @@ pub fn fail(msg: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+pub fn load_config() -> Config {
+    Config::load().unwrap_or_else(|e| fail(format!("{e:#}")))
+}
+
 pub async fn run(command: Command) -> i32 {
     match command {
         Command::Paths(args) => paths::run(args),
+        Command::Settings(args) => settings::run(args),
     }
 }
