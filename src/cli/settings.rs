@@ -26,6 +26,8 @@ pub enum SettingsCommand {
     Info(InfoArgs),
     #[command(about = "Print where the config file is")]
     Path,
+    #[command(about = "Open the config file in $VISUAL or $EDITOR and check it afterwards")]
+    Edit,
 }
 
 #[derive(Args, Debug)]
@@ -233,6 +235,36 @@ fn info(args: InfoArgs) -> i32 {
     0
 }
 
+fn edit() -> i32 {
+    let path = Config::path();
+    if !path.exists() {
+        super::save_config(&super::load_config());
+    }
+    let editor = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "vi".into());
+    let mut parts = editor.split_whitespace();
+    let program = parts.next().unwrap_or("vi");
+    let status = std::process::Command::new(program)
+        .args(parts)
+        .arg(&path)
+        .status()
+        .unwrap_or_else(|e| super::fail(format!("could not start {program}: {e}")));
+    if !status.success() {
+        super::fail(format!("{program} exited with {status}"));
+    }
+    match Config::load() {
+        Ok(_) => 0,
+        Err(e) => {
+            eprintln!("lyrminal: {e:#}");
+            eprintln!("Run lyrminal settings edit again to fix it.");
+            1
+        }
+    }
+}
+
 pub fn run(args: SettingsArgs) -> i32 {
     match args.command {
         SettingsCommand::List(a) => list(a),
@@ -245,5 +277,6 @@ pub fn run(args: SettingsArgs) -> i32 {
             println!("{}", Config::path().display());
             0
         }
+        SettingsCommand::Edit => edit(),
     }
 }
