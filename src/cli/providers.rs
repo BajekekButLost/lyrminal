@@ -31,6 +31,14 @@ pub enum ProvidersCommand {
     Set(SetArgs),
     #[command(about = "Put providers back to their default options, position and on/off; ids can also come from stdin")]
     Reset(ResetArgs),
+    #[command(about = "Show or change Prefer synced lyrics: on picks the best sync, off takes the first provider with any lyrics")]
+    PreferSynced(PreferArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct PreferArgs {
+    #[arg(help = "on, off or toggle; leave it out to print the current value, or pipe it in on stdin")]
+    pub value: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -332,6 +340,17 @@ fn reset(args: ResetArgs) -> i32 {
     0
 }
 
+fn prefer_synced(args: PreferArgs) -> i32 {
+    let s = setting_keys::find("providers.preferSynced").unwrap_or_else(|e| super::fail(e));
+    if args.value.is_none() && !super::stdin_piped() {
+        println!("{}", setting_keys::value(&super::load_config(), &s.item, false));
+        return 0;
+    }
+    let value = super::read_value(args.value, s.key());
+    super::settings::change(&s, |cfg| setting_keys::apply(cfg, &s.item, &value));
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
@@ -343,6 +362,7 @@ pub fn run(args: ProvidersArgs) -> i32 {
         ProvidersCommand::Get(a) => get(a),
         ProvidersCommand::Set(a) => set(a),
         ProvidersCommand::Reset(a) => reset(a),
+        ProvidersCommand::PreferSynced(a) => prefer_synced(a),
     }
 }
 
