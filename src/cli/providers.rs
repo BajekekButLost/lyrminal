@@ -27,6 +27,18 @@ pub enum ProvidersCommand {
     Options(OptionsArgs),
     #[command(about = "Print the value of one of a provider's options")]
     Get(GetArgs),
+    #[command(about = "Change one of a provider's options; the value can also come from stdin")]
+    Set(SetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct SetArgs {
+    #[arg(help = "Provider id or name")]
+    pub provider: String,
+    #[arg(help = "Option name, e.g. durationToleranceSecs (see providers options)")]
+    pub option: String,
+    #[arg(allow_hyphen_values = true, help = "The new value; leave it out or use - to read it from stdin")]
+    pub value: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -275,6 +287,13 @@ fn get(args: GetArgs) -> i32 {
     0
 }
 
+fn set(args: SetArgs) -> i32 {
+    let (_, s) = option(&args.provider, &args.option);
+    let value = super::read_value(args.value, s.key());
+    super::settings::change(&s, |cfg| setting_keys::apply(cfg, &s.item, &value));
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
@@ -284,6 +303,7 @@ pub fn run(args: ProvidersArgs) -> i32 {
         ProvidersCommand::Order(a) => order(a),
         ProvidersCommand::Options(a) => options(a),
         ProvidersCommand::Get(a) => get(a),
+        ProvidersCommand::Set(a) => set(a),
     }
 }
 
