@@ -10,6 +10,13 @@ pub struct UpdateArgs {
     pub yes: bool,
     #[arg(long, help = "Only check: exit with 0 when up to date, 1 when a new release is out and 2 when the check fails")]
     pub check: bool,
+    #[arg(long, conflicts_with = "check", help = "Build the release on this machine with cargo instead of downloading the prebuilt binary")]
+    pub from_source: bool,
+}
+
+async fn build(client: &reqwest::Client, release: &Release) -> Result<std::path::PathBuf, String> {
+    eprintln!("Downloading and building Lyrminal v{} from source, this can take a few minutes", release.version);
+    update::build_from_source(client, release, |_, _| {}).await
 }
 
 async fn check_only() -> i32 {
@@ -87,14 +94,19 @@ pub async fn run(args: UpdateArgs) -> i32 {
         Err(e) => super::fail(format!("could not check for updates: {e}")),
     };
     describe(&release);
-    if release.asset.is_none() {
-        super::fail("there is no prebuilt binary for this system");
+    let from_source = args.from_source || release.asset.is_none();
+    if !args.from_source && from_source {
+        eprintln!("lyrminal: there is no prebuilt binary for this system, so it will be built from source");
+    }
+    if from_source && !update::has_cargo() {
+        super::fail("building needs cargo, install Rust from https://rustup.rs");
     }
     if !ask(&release, args.yes) {
         println!("Nothing was installed");
         return 1;
     }
-    match install_binary(&client, &release).await {
+    let installed = if from_source { build(&client, &release).await } else { install_binary(&client, &release).await };
+    match installed {
         Ok(path) => {
             println!("Installed Lyrminal v{} at {}", release.version, path.display());
             println!("A running Lyrminal keeps the old version until you restart it");

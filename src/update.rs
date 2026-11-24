@@ -341,6 +341,76 @@ where
     Ok(dest)
 }
 
+fn run_tool(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
+    let status = cmd.status().map_err(|e| format!("could not run {what} ({e})"))?;
+    if status.success() { Ok(()) } else { Err(format!("{what} failed ({status})")) }
+}
+
+fn build_in(dir: &Path, tarball: &[u8]) -> Result<Vec<u8>, String> {
+    let archive = dir.join("source.tar.gz");
+    let src = dir.join("source");
+    std::fs::write(&archive, tarball).map_err(|e| format!("could not save the source ({e})"))?;
+    std::fs::create_dir_all(&src).map_err(|e| format!("could not unpack the source ({e})"))?;
+    run_tool(
+        std::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("--strip-components=1"),
+        "tar",
+    )?;
+    run_tool(
+        std::process::Command::new("cargo")
+            .args(["build", "--release", "--locked", "--manifest-path"])
+            .arg(src.join("Cargo.toml"))
+            .env("CARGO_TARGET_DIR", dir.join("target"))
+            .stdin(std::process::Stdio::null()),
+        "cargo build",
+    )?;
+    std::fs::read(dir.join("target").join("release").join("lyrminal")).map_err(|e| format!("the build left no binary ({e})"))
+}
+
+pub fn has_cargo() -> bool {
+    std::process::Command::new("cargo")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+pub async fn build_from_source<F>(client: &reqwest::Client, release: &Release, progress: F) -> Result<PathBuf, String>
+where
+    F: FnMut(u64, u64),
+{
+    let dest = install_path()?;
+    if !has_cargo() {
+        return Err("building needs cargo, install Rust from https://rustup.rs".into());
+    }
+    let source = Asset {
+        name: format!("{}.tar.gz", release.tag),
+        url: format!("https://github.com/{REPO}/archive/refs/tags/{}.tar.gz", release.tag),
+        size: 0,
+    };
+    let tarball = download(client, &source, progress).await?;
+    let dir = std::env::temp_dir().join(format!(
+        "lyrminal-build-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+    ));
+    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {} ({e})", dir.display()))?;
+    let version = release.version.clone();
+    let path = dest.clone();
+    let work = dir.clone();
+    let result = tokio::task::spawn_blocking(move || build_in(&work, &tarball).and_then(|data| replace(&path, &data, &version)))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r);
+    let _ = std::fs::remove_dir_all(&dir);
+    result.map(|()| dest)
+}
+
 fn restart_args() -> Vec<std::ffi::OsString> {
     crate::config::relaunch_args()
 }
