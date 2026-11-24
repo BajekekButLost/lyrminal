@@ -129,6 +129,7 @@ pub enum LibraryDone {
         identity: String,
         key: String,
         resolution: Resolution,
+        selection: u64,
     },
     Removed(Entry),
 }
@@ -198,6 +199,7 @@ pub struct App {
     config_stamp: Option<(std::time::SystemTime, u64)>,
     next_config_check: Instant,
     base: Config,
+    selection: u64,
 }
 
 impl App {
@@ -270,6 +272,7 @@ impl App {
             config_stamp,
             next_config_check: now + CONFIG_CHECK_EVERY,
             base,
+            selection: 0,
         };
         app.ensure_fonts();
         app
@@ -638,6 +641,7 @@ impl App {
                         self.set_overlay(Overlay::None);
                         self.temporary = None;
                         self.generation += 1;
+                        self.selection += 1;
                         self.install(Resolution {
                             candidate,
                             lyrics,
@@ -708,6 +712,7 @@ impl App {
             return;
         };
         let (q, identity) = (track.query(), track.identity_key());
+        let selection = self.selection;
         let client = self.client.clone();
         let lib = self.library.clone();
         let tx = self.msg_tx.clone();
@@ -724,6 +729,7 @@ impl App {
                             lyrics,
                             manual: true,
                         },
+                        selection,
                     };
                     let _ = tx.send(AppMsg::Library {
                         seq: u64::MAX,
@@ -941,6 +947,7 @@ impl App {
                             }
                             self.set_overlay(Overlay::None);
                             self.temporary = None;
+                            self.selection += 1;
                             self.schedule_fetch(Duration::ZERO);
                             self.notify("Picking the best sync automatically");
                         }
@@ -1430,6 +1437,7 @@ impl App {
         };
         let client = self.client.clone();
         let lib = self.library.clone();
+        let selection = self.selection;
         self.spawn_library("Loading", async move {
             let lyrics = lib.load(&entry, &client, q.duration).await?;
             let key = q.key();
@@ -1442,6 +1450,7 @@ impl App {
                     lyrics,
                     manual: true,
                 },
+                selection,
             })
         });
     }
@@ -1459,6 +1468,7 @@ impl App {
     }
 
     fn show_now(&mut self, resolution: Resolution) {
+        self.selection += 1;
         self.generation += 1;
         self.fetch_due = None;
         self.install(resolution);
@@ -1519,21 +1529,30 @@ impl App {
                 }
                 self.notify(msg);
             }
-            LibraryDone::Applied { identity, key, resolution } => {
+            LibraryDone::Applied {
+                identity,
+                key,
+                resolution,
+                selection,
+            } => {
                 let title = resolution.candidate.title.clone();
                 self.state.choices.insert(key, resolution.candidate.clone());
                 self.state.save();
-                if self.track_identity.as_deref() == Some(identity.as_str()) {
+                let current = self.track_identity.as_deref() == Some(identity.as_str());
+                let newer = selection != self.selection;
+                if current && !newer {
                     self.temporary = None;
                     self.show_now(resolution);
                 }
                 if open {
                     self.close_library();
                 }
-                self.notify(if local_on {
-                    format!("Using “{title}” from the local library for this track")
-                } else {
+                self.notify(if !local_on {
                     "Chosen, but the Local library provider is off: Esc → Providers".to_string()
+                } else if current && newer {
+                    format!("Saved “{title}” as the choice for this track, keeping the lyrics picked since")
+                } else {
+                    format!("Using “{title}” from the local library for this track")
                 });
             }
             LibraryDone::Removed(entry) => {
@@ -2406,6 +2425,59 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.quit);
         assert_eq!(app.restart_into, Some(path));
+    }
+
+    #[tokio::test]
+    async fn a_slow_library_pick_keeps_lyrics_chosen_after_it_started() {
+        let state = std::env::temp_dir().join(format!("lyrminal-state-test-{}.json", std::process::id()));
+        crate::config::set_state_file(state.clone());
+        let mut app = app();
+        app.guide = None;
+        app.on_player(snapshot());
+        let started = app.selection;
+        let newer = crate::ipc::TemporaryLyrics {
+            text: "[00:01.00]newer\n".into(),
+            source: Source::Stdin,
+            format: None,
+        };
+        assert_eq!(app.load_temporary(newer)["ok"], true);
+        let applied = |app: &App, text: &str, selection: u64| {
+            let (lyrics, _) = library::parse(text, &Source::Clipboard, None, Some(30.0)).unwrap();
+            AppMsg::Library {
+                seq: u64::MAX,
+                result: Ok(LibraryDone::Applied {
+                    identity: app.track_identity.clone().unwrap(),
+                    key: app.track_key().unwrap(),
+                    resolution: Resolution {
+                        candidate: Candidate {
+                            provider: crate::providers::local::ID.into(),
+                            id: "older".into(),
+                            title: "Tour Song".into(),
+                            artists: vec!["Nobody".into()],
+                            album: None,
+                            duration: Some(30.0),
+                            tier: None,
+                            kind_hint: None,
+                            note: None,
+                        },
+                        lyrics,
+                        manual: true,
+                    },
+                    selection,
+                }),
+            }
+        };
+        let shown = |app: &App| app.prepared().map(|(p, _)| p.lyrics.lines[0].lead.text());
+        let msg = applied(&app, "[00:01.00]older\n", started);
+        app.on_msg(msg);
+        assert_eq!(shown(&app).as_deref(), Some("newer"));
+        assert!(app.temporary.is_some());
+        assert!(app.state.choices.get(&app.track_key().unwrap()).is_some_and(|c| c.id == "older"));
+        let msg = applied(&app, "[00:01.00]picked now\n", app.selection);
+        app.on_msg(msg);
+        assert_eq!(shown(&app).as_deref(), Some("picked now"));
+        assert!(app.temporary.is_none());
+        let _ = std::fs::remove_file(state);
     }
 
     #[tokio::test]
