@@ -19,6 +19,16 @@ pub enum ProvidersCommand {
     Enable(IdsArgs),
     #[command(about = "Turn providers off; ids can also come from stdin")]
     Disable(IdsArgs),
+    #[command(about = "Change a provider's priority; the place can also come from stdin")]
+    Move(MoveArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct MoveArgs {
+    #[arg(help = "Provider id or name")]
+    pub provider: String,
+    #[arg(help = "A position (1 is tried first), up, down, top or bottom; leave it out or use - to read it from stdin")]
+    pub to: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -127,11 +137,41 @@ fn set_enabled(args: IdsArgs, on: bool) -> i32 {
     0
 }
 
+pub fn target_position(to: &str, current: usize, count: usize) -> Result<usize, String> {
+    let last = count.saturating_sub(1);
+    match to.trim().to_lowercase().as_str() {
+        "up" => Ok(current.saturating_sub(1)),
+        "down" => Ok((current + 1).min(last)),
+        "top" | "first" => Ok(0),
+        "bottom" | "last" => Ok(last),
+        n => match n.parse::<usize>() {
+            Ok(n) if (1..=count).contains(&n) => Ok(n - 1),
+            _ => Err(format!("“{to}” is not a position from 1 to {count}, up, down, top or bottom")),
+        },
+    }
+}
+
+fn move_provider(args: MoveArgs) -> i32 {
+    let p = provider(&args.provider);
+    let to = super::read_value(args.to, "move");
+    let mut cfg = super::load_config();
+    let mut ids = ordered_ids(&cfg);
+    let current = ids.iter().position(|id| id == p.id).unwrap_or(0);
+    let target = target_position(&to, current, ids.len()).unwrap_or_else(|e| super::fail(e));
+    let id = ids.remove(current);
+    ids.insert(target, id);
+    cfg.providers.order = ids;
+    super::save_config(&cfg);
+    print_order(&cfg, false);
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
         ProvidersCommand::Enable(a) => set_enabled(a, true),
         ProvidersCommand::Disable(a) => set_enabled(a, false),
+        ProvidersCommand::Move(a) => move_provider(a),
     }
 }
 
@@ -151,5 +191,16 @@ mod tests {
         assert!(resolve("lrc").is_err());
         assert_eq!(json_name("local-library"), "localLibrary");
         assert_eq!(json_name("lrcmux"), "lrcmux");
+    }
+
+    #[test]
+    fn works_out_where_a_provider_moves() {
+        assert_eq!(target_position("up", 0, 6), Ok(0));
+        assert_eq!(target_position("down", 5, 6), Ok(5));
+        assert_eq!(target_position("Top", 3, 6), Ok(0));
+        assert_eq!(target_position("bottom", 0, 6), Ok(5));
+        assert_eq!(target_position("2", 4, 6), Ok(1));
+        assert!(target_position("7", 0, 6).is_err());
+        assert!(target_position("0", 0, 6).is_err());
     }
 }
