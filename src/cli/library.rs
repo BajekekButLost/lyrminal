@@ -212,8 +212,9 @@ pub fn source_for(arg: Option<&str>) -> Result<Source, String> {
 }
 
 fn describe(q: &TrackQuery) -> String {
-    let artist = q.artist_line();
-    if artist.is_empty() { format!("“{}”", q.title) } else { format!("“{}” by {artist}", q.title) }
+    let artist = super::printable(&q.artist_line());
+    let title = super::printable(&q.title);
+    if artist.is_empty() { format!("“{title}”") } else { format!("“{title}” by {artist}") }
 }
 
 async fn add_temporary(source: Source, pasted: Option<String>, format: Option<Format>) -> i32 {
@@ -322,7 +323,7 @@ fn list(args: ListArgs) -> i32 {
         let id: String = e.id.chars().take(SHORT_ID).collect();
         let artist = e.track.artist_line();
         let song = if artist.is_empty() { e.track.title.clone() } else { format!("{artist} — {}", e.track.title) };
-        println!("{id}  {song}  ({})", e.summary());
+        println!("{id}  {}  ({})", super::printable(&song), super::printable(&e.summary()));
     }
     0
 }
@@ -405,7 +406,7 @@ fn show(args: ShowArgs) -> i32 {
     ];
     println!("{}", e.id);
     for (name, value) in rows {
-        println!("  {name:<18}  {value}");
+        println!("  {name:<18}  {}", super::printable(&value));
     }
     0
 }

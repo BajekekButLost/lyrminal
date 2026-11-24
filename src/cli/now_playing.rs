@@ -133,7 +133,7 @@ pub fn clock(secs: f64) -> String {
 
 fn plain(v: &Value) -> String {
     match v {
-        Value::String(s) => s.clone(),
+        Value::String(s) => super::printable(s),
         Value::Null => String::new(),
         other => other.to_string(),
     }
@@ -150,11 +150,10 @@ pub fn format(data: &Value, field: Field) -> String {
 }
 
 pub fn raw(data: &Value, field: Field) -> String {
-    let text = match field {
+    match field {
         Field::Time => format!("{}/{}", plain(&data["position"]), plain(&data["length"])),
         f => plain(&data[f.key()]),
-    };
-    text.replace(['\t', '\n', '\r'], " ")
+    }
 }
 
 pub fn render(data: &Value, fields: &[Field], separator: &str, unformatted: bool) -> String {
@@ -286,6 +285,10 @@ mod tests {
         assert_eq!(format(&data, Field::Progress), "43%");
         assert_eq!(format(&data, Field::Line), "12");
         assert_eq!(format(&data, Field::Album), "");
+        let evil = json!({"title": "Song\u{1b}[2J\u{9b}31m\tB\nC"});
+        assert_eq!(format(&evil, Field::Title), "Song[2J31m B C");
+        assert_eq!(raw(&evil, Field::Title), "Song[2J31m B C");
+        assert_eq!(to_json(&evil, &[Field::Title])["title"], "Song\u{1b}[2J\u{9b}31m\tB\nC");
         let picked = to_json(&json!({"ok": true, "title": "T", "position": 1.0, "length": 2.0, "text": "x"}), &[Field::Time, Field::Title]);
         assert_eq!(picked, json!({"title": "T", "position": 1.0, "length": 2.0}));
         assert_eq!(to_json(&json!({"ok": true, "text": "x"}), &[]), json!({"text": "x"}));

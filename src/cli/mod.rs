@@ -144,6 +144,16 @@ pub fn fail(msg: impl std::fmt::Display) -> ! {
     std::process::exit(1);
 }
 
+pub fn printable(s: &str) -> String {
+    s.chars()
+        .filter_map(|c| match c {
+            '\t' | '\n' | '\r' => Some(' '),
+            c if c.is_control() => None,
+            c => Some(c),
+        })
+        .collect()
+}
+
 pub fn load_config() -> Config {
     Config::load().unwrap_or_else(|e| fail(format!("{e:#}")))
 }
