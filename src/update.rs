@@ -191,8 +191,16 @@ fn release_from(gh: GhRelease, target: Option<&str>) -> Option<Release> {
 }
 
 pub async fn check(client: &reqwest::Client) -> Result<Option<Release>, String> {
+    Ok(fetch(client, None).await?.filter(|r| is_newer(&r.version, CURRENT)))
+}
+
+pub async fn fetch(client: &reqwest::Client, tag: Option<&str>) -> Result<Option<Release>, String> {
+    let which = match tag {
+        Some(t) => format!("tags/{t}"),
+        None => "latest".into(),
+    };
     let resp = client
-        .get(format!("https://api.github.com/repos/{REPO}/releases/latest"))
+        .get(format!("https://api.github.com/repos/{REPO}/releases/{which}"))
         .header(reqwest::header::ACCEPT, "application/vnd.github+json")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .send()
@@ -209,7 +217,7 @@ pub async fn check(client: &reqwest::Client) -> Result<Option<Release>, String> 
         return Err(format!("GitHub answered {status}"));
     }
     let gh: GhRelease = resp.json().await.map_err(|e| format!("unexpected answer from GitHub ({e})"))?;
-    Ok(release_from(gh, target()).filter(|r| is_newer(&r.version, CURRENT)))
+    Ok(release_from(gh, target()))
 }
 
 pub fn install_path() -> Result<PathBuf, String> {
@@ -333,11 +341,124 @@ where
     Ok(dest)
 }
 
-fn restart_args() -> Vec<std::ffi::OsString> {
-    match crate::config::base_dir() {
-        Some(base) => vec!["--base-directory".into(), base.into()],
-        None => Vec::new(),
+fn run_tool(cmd: &mut std::process::Command, what: &str) -> Result<(), String> {
+    let status = cmd.status().map_err(|e| format!("could not run {what} ({e})"))?;
+    if status.success() { Ok(()) } else { Err(format!("{what} failed ({status})")) }
+}
+
+fn build_in(dir: &Path, tarball: &[u8]) -> Result<Vec<u8>, String> {
+    let archive = dir.join("source.tar.gz");
+    let src = dir.join("source");
+    std::fs::write(&archive, tarball).map_err(|e| format!("could not save the source ({e})"))?;
+    std::fs::create_dir_all(&src).map_err(|e| format!("could not unpack the source ({e})"))?;
+    run_tool(
+        std::process::Command::new("tar")
+            .arg("-xzf")
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .arg("--strip-components=1"),
+        "tar",
+    )?;
+    let out = std::process::Command::new("cargo")
+        .args(["build", "--release", "--locked", "--message-format=json-render-diagnostics", "--manifest-path"])
+        .arg(src.join("Cargo.toml"))
+        .current_dir(&src)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("could not run cargo build ({e})"))?;
+    if !out.status.success() {
+        return Err(format!("cargo build failed ({})", out.status));
     }
+    let exe = built_executable(&String::from_utf8_lossy(&out.stdout)).ok_or("the build left no binary")?;
+    std::fs::read(&exe).map_err(|e| format!("could not read the built binary {} ({e})", exe.display()))
+}
+
+fn built_executable(messages: &str) -> Option<PathBuf> {
+    messages
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "lyrminal")
+        .filter(|m| m["target"]["kind"].as_array().is_some_and(|k| k.iter().any(|v| v == "bin")))
+        .filter_map(|m| m["executable"].as_str().map(PathBuf::from))
+        .next_back()
+}
+
+struct BuildDir(PathBuf);
+
+impl Drop for BuildDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl BuildDir {
+    fn create() -> Result<Self, String> {
+        use std::hash::{BuildHasher, Hasher};
+        #[cfg(unix)]
+        use std::os::unix::fs::DirBuilderExt;
+        let root = std::env::temp_dir();
+        for _ in 0..16 {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+            h.write_u32(std::process::id());
+            let dir = root.join(format!("lyrminal-build-{:016x}", h.finish()));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("could not create {} ({e})", dir.display())),
+            }
+        }
+        Err(format!("could not create a build folder in {}", root.display()))
+    }
+}
+
+pub fn has_cargo() -> bool {
+    std::process::Command::new("cargo")
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
+}
+
+pub async fn build_from_source<F>(client: &reqwest::Client, release: &Release, progress: F) -> Result<PathBuf, String>
+where
+    F: FnMut(u64, u64),
+{
+    let dest = install_path()?;
+    if !has_cargo() {
+        return Err("building needs cargo, install Rust from https://rustup.rs".into());
+    }
+    let source = Asset {
+        name: format!("{}.tar.gz", release.tag),
+        url: format!("https://github.com/{REPO}/archive/refs/tags/{}.tar.gz", release.tag),
+        size: 0,
+    };
+    let tarball = download(client, &source, progress).await?;
+    let dir = BuildDir::create()?;
+    let version = release.version.clone();
+    let path = dest.clone();
+    tokio::task::spawn_blocking(move || {
+        let result = build_in(&dir.0, &tarball).and_then(|data| replace(&path, &data, &version));
+        drop(dir);
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(dest)
+}
+
+fn restart_args() -> Vec<std::ffi::OsString> {
+    let mut args = crate::config::relaunch_args();
+    args.extend(crate::overrides::relaunch_args());
+    args
 }
 
 #[cfg(unix)]
@@ -424,6 +545,35 @@ mod tests {
         replace(&dest, &data, "1.0.0").unwrap();
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), data.len() as u64);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_the_built_binary_in_cargo_messages() {
+        let messages = [
+            r#"{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"serde"},"executable":null}"#,
+            "not json",
+            r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"lyrminal"},"executable":"/b/target/x86_64-unknown-linux-musl/release/lyrminal"}"#,
+            r#"{"reason":"build-finished","success":true}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            built_executable(&messages),
+            Some(PathBuf::from("/b/target/x86_64-unknown-linux-musl/release/lyrminal"))
+        );
+        assert_eq!(built_executable(r#"{"reason":"build-finished","success":false}"#), None);
+    }
+
+    #[test]
+    fn build_folders_are_private_fresh_and_cleaned_up() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = BuildDir::create().unwrap();
+        let b = BuildDir::create().unwrap();
+        assert_ne!(a.0, b.0);
+        assert_eq!(std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777, 0o700);
+        let path = a.0.clone();
+        std::fs::write(path.join("x"), "y").unwrap();
+        drop(a);
+        assert!(!path.exists());
     }
 
     #[test]

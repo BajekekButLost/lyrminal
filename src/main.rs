@@ -1,11 +1,16 @@
 mod anim;
 mod app;
+mod cli;
 mod config;
+mod ipc;
 mod library;
 mod lyrics;
+mod now_playing;
+mod overrides;
 mod player;
 mod providers;
 mod render;
+mod setting_keys;
 mod state;
 mod term;
 mod theme;
@@ -16,6 +21,7 @@ use std::io::Write;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use clap::{CommandFactory, Parser};
 use crossterm::event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, EventStream};
 use crossterm::execute;
 use futures::StreamExt;
@@ -28,97 +34,87 @@ use crate::ui::draw::{self, Graphics};
 
 const IDLE_FRAME: Duration = Duration::from_millis(250);
 
-fn usage() {
-    println!(
-        "Lyrminal v{} — synced lyrics in your terminal\n\n\
-         Usage: lyrminal [options]\n\n\
-         Options:\n  \
-           -h, --help                    Show this help\n  \
-           -V, --version                 Show the version\n  \
-           --base-directory <dir>        Use <dir> as the home folder for Lyrminal's files\n                                \
-         ($BASE/.config/lyrminal, $BASE/.cache/lyrminal, ...); created if missing\n  \
-           --temp-base-directory         Same, in a new randomly named temporary folder\n\n\
-         Everything else is configured inside the app (press Esc).\n\
-         Config: {}",
-        env!("CARGO_PKG_VERSION"),
-        Config::path().display()
-    );
-}
-
-enum Base {
-    Home,
-    Dir(String),
-    Temp,
-}
-
-fn fail(msg: &str) -> ! {
-    eprintln!("lyrminal: {msg}");
-    eprintln!("Run lyrminal --help for the options.");
-    std::process::exit(2);
-}
-
-enum Info {
-    Help,
-    Version,
-}
-
-fn parse_args() -> (Base, Option<Info>) {
-    let mut base = Base::Home;
-    let mut info = None;
-    let set = |b: Base, base: &mut Base| {
-        if !matches!(base, Base::Home) {
-            fail("use only one of --base-directory and --temp-base-directory");
-        }
-        *base = b;
-    };
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "-h" | "--help" => info = Some(Info::Help),
-            "-V" | "--version" => info = info.or(Some(Info::Version)),
-            "--temp-base-directory" => set(Base::Temp, &mut base),
-            "--base-directory" => match args.next() {
-                Some(dir) if !dir.trim().is_empty() => set(Base::Dir(dir), &mut base),
-                _ => fail("--base-directory needs a folder"),
-            },
-            other => match other.strip_prefix("--base-directory=") {
-                Some(dir) if !dir.trim().is_empty() => set(Base::Dir(dir.to_string()), &mut base),
-                Some(_) => fail("--base-directory needs a folder"),
-                None => fail(&format!("unknown argument: {other}")),
-            },
-        }
+fn setup_base(global: &cli::GlobalArgs) {
+    if global.base_directory.is_some() && global.temp_base_directory {
+        cli::Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "use only one of --base-directory and --temp-base-directory",
+            )
+            .exit();
     }
-    (base, info)
+    let base = match (&global.base_directory, global.temp_base_directory) {
+        (Some(dir), _) => Some(config::prepare_base_dir(&library::expand_path(dir))),
+        (None, true) => Some(config::create_temp_base_dir()),
+        (None, false) => None,
+    };
+    match base {
+        Some(Ok(dir)) => config::set_base_dir(dir),
+        Some(Err(e)) => cli::fail(format!("{e:#}")),
+        None => {}
+    }
+    if let Some(file) = &global.config {
+        config::set_config_file(file_arg("--config", file));
+    }
+    if let Some(file) = &global.state_file {
+        config::set_state_file(file_arg("--state-file", file));
+    }
+    if let Some(dir) = &global.cache_dir {
+        config::set_cache_dir(dir_arg("--cache-dir", dir));
+    }
+    if let Some(dir) = &global.library_dir {
+        config::set_library_dir(dir_arg("--library-dir", dir));
+    }
+    if let Some(file) = &global.socket {
+        config::set_socket(file_arg("--socket", file));
+    }
+}
+
+fn dir_arg(flag: &str, value: &str) -> std::path::PathBuf {
+    let path = library::expand_path(value);
+    if path.exists() && !path.is_dir() {
+        cli::fail(format!("{flag} needs a folder, {} is a file", path.display()));
+    }
+    path
+}
+
+fn file_arg(flag: &str, value: &str) -> std::path::PathBuf {
+    let path = library::expand_path(value);
+    if path.is_dir() {
+        cli::fail(format!("{flag} needs a file, {} is a folder", path.display()));
+    }
+    path
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let (parsed, info) = parse_args();
-    if let Some(Info::Version) = info {
-        println!("lyrminal {}", env!("CARGO_PKG_VERSION"));
-        return Ok(());
+    let args = cli::Cli::parse();
+    if args.command.is_some() && args.launch.any() {
+        cli::Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "temporary settings only apply when starting the app, not to commands",
+            )
+            .exit();
     }
-    let temp = matches!(parsed, Base::Temp);
-    let base = match parsed {
-        Base::Home => None,
-        Base::Dir(dir) => Some(config::prepare_base_dir(&library::expand_path(&dir))),
-        Base::Temp if info.is_some() => None,
-        Base::Temp => Some(config::create_temp_base_dir()),
-    };
-    match base {
-        Some(Ok(dir)) => config::set_base_dir(dir),
-        Some(Err(e)) => {
-            eprintln!("lyrminal: {e:#}");
-            std::process::exit(1);
+    match args.launch.overrides() {
+        Ok(list) => overrides::set(list),
+        Err(e) => {
+            cli::Cli::command().error(clap::error::ErrorKind::InvalidValue, e).exit();
         }
-        None => {}
     }
-    if info.is_some() {
-        usage();
-        return Ok(());
+    setup_base(&args.global);
+    if let Some(command) = args.command {
+        unsafe {
+            libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        }
+        let code = cli::run(command).await;
+        std::process::exit(code);
     }
+    let temp = args.global.temp_base_directory;
 
     let fresh = !Config::path().exists();
+    let config_stamp = Config::stamp();
     let cfg = match Config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -128,24 +124,30 @@ async fn main() -> Result<()> {
         }
     };
 
+    let mut effective = cfg.clone();
+    overrides::apply(&mut effective);
     let caps = term::probe();
     let mut terminal = ratatui::init();
     term::reset_backdrop_on_panic();
-    let mut mouse = cfg.appearance.mouse;
+    let mut mouse = effective.appearance.mouse;
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     if mouse {
         let _ = execute!(std::io::stdout(), EnableMouseCapture);
     }
 
-    let (player_tx, player_rx) = player::spawn(cfg.player.clone());
+    let (player_tx, player_rx) = player::spawn(effective.player.clone());
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
-    let mut app = App::new(cfg, caps, player_tx, msg_tx);
+    let (ipc_tx, ipc_rx) = mpsc::unbounded_channel();
+    let server = ipc::serve(config::socket_path(), ipc_tx);
+    let mut app = App::new(cfg, config_stamp, caps, player_tx, msg_tx);
     app.maybe_onboard(fresh);
     app.enable_update_checks();
     let mut gfx = Graphics::default();
     let mut backdrop = term::Backdrop::default();
 
-    let result = run(&mut terminal, &mut app, &mut gfx, &mut backdrop, player_rx, msg_rx, &mut mouse).await;
+    let channels = Channels { player_rx, msg_rx, ipc_rx };
+    let result = run(&mut terminal, &mut app, &mut gfx, &mut backdrop, channels, &mut mouse).await;
+    drop(server);
 
     let mut out = std::io::stdout();
     let _ = gfx.clear(&mut out);
@@ -170,15 +172,25 @@ async fn main() -> Result<()> {
     result
 }
 
+struct Channels {
+    player_rx: mpsc::UnboundedReceiver<player::PlayerEvent>,
+    msg_rx: mpsc::UnboundedReceiver<app::AppMsg>,
+    ipc_rx: mpsc::UnboundedReceiver<ipc::Incoming>,
+}
+
 async fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     gfx: &mut Graphics,
     backdrop: &mut term::Backdrop,
-    mut player_rx: mpsc::UnboundedReceiver<player::PlayerEvent>,
-    mut msg_rx: mpsc::UnboundedReceiver<app::AppMsg>,
+    channels: Channels,
     mouse: &mut bool,
 ) -> Result<()> {
+    let Channels {
+        mut player_rx,
+        mut msg_rx,
+        mut ipc_rx,
+    } = channels;
     let mut events = EventStream::new();
     let mut next_frame = tokio::time::Instant::now();
     let mut last_area = None;
@@ -191,6 +203,7 @@ async fn run(
             },
             Some(ev) = player_rx.recv() => app.on_player(ev),
             Some(m) = msg_rx.recv() => app.on_msg(m),
+            Some(m) = ipc_rx.recv() => app.on_ipc(m),
         }
         let now = Instant::now();
         app.tick(now);

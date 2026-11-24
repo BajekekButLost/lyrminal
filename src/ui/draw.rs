@@ -658,6 +658,7 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
         } else {
             settings::value_text(&app.cfg, &it.kind)
         };
+        let value = if crate::overrides::item_lock(it).is_some() { format!("🔒 {value}") } else { value };
         let label_style = if matches!(it.kind, Kind::Info) {
             panel_ink(theme, row_bg, 0.85).add_modifier(Modifier::BOLD)
         } else {
@@ -705,7 +706,13 @@ fn draw_settings(f: &mut Frame, app: &App, hits: &mut UiHits) {
     } else if items.get(selected).is_some_and(|i| matches!(i.kind, Kind::Action(settings::SettingsAction::Update))) {
         app.update.desc()
     } else {
-        items.get(selected).map(|i| i.desc.clone()).unwrap_or_default()
+        items
+            .get(selected)
+            .map(|i| match crate::overrides::item_lock(i) {
+                Some(o) => format!("{}. {}", settings::lock_message(o), i.desc),
+                None => i.desc.clone(),
+            })
+            .unwrap_or_default()
     };
     f.render_widget(
         Paragraph::new(desc_text)
@@ -1344,7 +1351,13 @@ mod tests {
     async fn draws_the_library_dialog() {
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(crate::config::Config::default(), crate::term::TermCaps::default(), player_tx, msg_tx);
+        let mut app = App::new(
+            crate::config::Config::default(),
+            crate::config::Config::stamp(),
+            crate::term::TermCaps::default(),
+            player_tx,
+            msg_tx,
+        );
         let dir = std::env::temp_dir().join(format!("lyrminal-draw-test-{}", std::process::id()));
         app.library = crate::library::Library::new(dir.clone());
         let track = crate::player::TrackMeta {
@@ -1413,7 +1426,13 @@ mod tests {
         let press = |app: &mut App, code: KeyCode| app.on_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(crate::config::Config::default(), crate::term::TermCaps::default(), player_tx, msg_tx);
+        let mut app = App::new(
+            crate::config::Config::default(),
+            crate::config::Config::stamp(),
+            crate::term::TermCaps::default(),
+            player_tx,
+            msg_tx,
+        );
         let dir = std::env::temp_dir().join(format!("lyrminal-e2e-{}", std::process::id()));
         app.library = crate::library::Library::new(dir.clone());
         let track = crate::player::TrackMeta {

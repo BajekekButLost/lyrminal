@@ -29,6 +29,7 @@ use crate::update::{self, Release, Status as UpdateStatus};
 const FETCH_DEBOUNCE: Duration = Duration::from_millis(350);
 const TOAST_FOR: Duration = Duration::from_secs(3);
 const MOUSE_SCROLL_ROWS: f64 = 4.0;
+const CONFIG_CHECK_EVERY: Duration = Duration::from_secs(1);
 
 pub enum LyricsState {
     NoPlayer,
@@ -128,6 +129,7 @@ pub enum LibraryDone {
         identity: String,
         key: String,
         resolution: Resolution,
+        selection: u64,
     },
     Removed(Entry),
 }
@@ -194,15 +196,23 @@ pub struct App {
     update_checks: bool,
     next_update_check: Option<Instant>,
     pub restart_into: Option<std::path::PathBuf>,
+    config_stamp: Option<(std::time::SystemTime, u64)>,
+    next_config_check: Instant,
+    base: Config,
+    selection: u64,
 }
 
 impl App {
     pub fn new(
         cfg: Config,
+        config_stamp: Option<(std::time::SystemTime, u64)>,
         caps: TermCaps,
         player_tx: UnboundedSender<PlayerCommand>,
         msg_tx: UnboundedSender<AppMsg>,
     ) -> Self {
+        let base = cfg.clone();
+        let mut cfg = cfg;
+        crate::overrides::apply(&mut cfg);
         let client = crate::providers::http_client();
         let registry = Registry::from_config(&cfg, &client);
         let cache = Cache::new(crate::config::cache_dir(), cfg.cache.ttl_days, cfg.cache.enabled);
@@ -259,6 +269,10 @@ impl App {
             update_checks: false,
             next_update_check: None,
             restart_into: None,
+            config_stamp,
+            next_config_check: now + CONFIG_CHECK_EVERY,
+            base,
+            selection: 0,
         };
         app.ensure_fonts();
         app
@@ -398,6 +412,7 @@ impl App {
         }
         self.update_tick(now);
         self.guide_tick(now);
+        self.watch_config(now);
     }
 
     pub fn needs_animation(&self) -> bool {
@@ -626,6 +641,7 @@ impl App {
                         self.set_overlay(Overlay::None);
                         self.temporary = None;
                         self.generation += 1;
+                        self.selection += 1;
                         self.install(Resolution {
                             candidate,
                             lyrics,
@@ -667,6 +683,134 @@ impl App {
                 }
             }
         }
+    }
+
+    pub fn on_ipc(&mut self, msg: crate::ipc::Incoming) {
+        let answer = match msg.request {
+            crate::ipc::Request::UseEntry { id } => return self.use_entry(&id, msg.reply),
+            crate::ipc::Request::NowPlaying => crate::ipc::ok(crate::now_playing::snapshot(self, Instant::now())),
+            crate::ipc::Request::ReloadConfig => match self.reload_config() {
+                Ok(()) => crate::ipc::ok(serde_json::json!({})),
+                Err(e) => crate::ipc::error(e),
+            },
+            crate::ipc::Request::LibraryChanged(change) => {
+                self.library_changed(&change);
+                crate::ipc::ok(serde_json::json!({}))
+            }
+            crate::ipc::Request::Temporary(t) => self.load_temporary(t),
+        };
+        let _ = msg.reply.send(answer);
+    }
+
+    fn use_entry(&mut self, id: &str, reply: tokio::sync::oneshot::Sender<serde_json::Value>) {
+        let Some(entry) = self.library.get(id) else {
+            let _ = reply.send(crate::ipc::error(format!("there is no sync with the id {id} in the library")));
+            return;
+        };
+        let Some(track) = self.playing_track() else {
+            let _ = reply.send(crate::ipc::error("nothing is playing"));
+            return;
+        };
+        let (q, identity) = (track.query(), track.identity_key());
+        let selection = self.selection;
+        let client = self.client.clone();
+        let lib = self.library.clone();
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            match lib.load(&entry, &client, q.duration).await {
+                Ok(lyrics) => {
+                    let key = q.key();
+                    let tier = if entry.key == key { MatchTier::Exact } else { MatchTier::Related };
+                    let done = LibraryDone::Applied {
+                        identity,
+                        key,
+                        resolution: Resolution {
+                            candidate: crate::providers::local::entry_candidate(&entry, Some(tier)),
+                            lyrics,
+                            manual: true,
+                        },
+                        selection,
+                    };
+                    let _ = tx.send(AppMsg::Library {
+                        seq: u64::MAX,
+                        result: Ok(done),
+                    });
+                    let _ = reply.send(crate::ipc::ok(serde_json::json!({ "title": entry.track.title })));
+                }
+                Err(e) => {
+                    let _ = reply.send(crate::ipc::error(e));
+                }
+            }
+        });
+    }
+
+    fn playing_track(&self) -> Option<&TrackMeta> {
+        self.track.as_ref().filter(|t| !matches!(t.media_kind(), MediaKind::Ad | MediaKind::Episode))
+    }
+
+    fn load_temporary(&mut self, t: crate::ipc::TemporaryLyrics) -> serde_json::Value {
+        let Some(track) = self.playing_track() else {
+            return crate::ipc::error("nothing is playing");
+        };
+        let req = ImportRequest {
+            track: track.query(),
+            identity: track.identity_key(),
+            temporary: true,
+            source: t.source,
+            watch: false,
+            format: t.format,
+            pasted: None,
+        };
+        match temporary_import(req, &t.text) {
+            Ok(LibraryDone::Imported {
+                identity,
+                resolution,
+                warning,
+                ..
+            }) => {
+                let title = resolution.candidate.title.clone();
+                self.temporary = Some((identity, resolution.clone()));
+                self.show_now(resolution);
+                self.notify("Loaded temporary lyrics for this song");
+                crate::ipc::ok(serde_json::json!({ "title": title, "warning": warning }))
+            }
+            Ok(_) => crate::ipc::error("the lyrics could not be loaded"),
+            Err(e) => crate::ipc::error(e),
+        }
+    }
+
+    fn library_changed(&mut self, change: &crate::ipc::LibraryChange) {
+        if change.forget_choices(&mut self.state.choices) {
+            self.state.save();
+        }
+        let entries = self.library.entries();
+        if let Overlay::Library(d) = &mut self.overlay {
+            d.set_entries(entries);
+        }
+        let local = crate::providers::local::ID;
+        let showing = matches!(&self.lyrics, LyricsState::Ready { resolution, .. }
+            if resolution.candidate.provider == local
+                && (change.changed.contains(&resolution.candidate.id) || change.removed.contains(&resolution.candidate.id)));
+        let added = self.track_key().is_some_and(|k| change.added.contains(&k));
+        let touched = !(change.added.is_empty() && change.changed.is_empty() && change.removed.is_empty());
+        let loading = matches!(self.lyrics, LyricsState::Loading) && touched;
+        if self.track.is_some() && self.temporary.is_none() && (showing || added || loading) {
+            self.schedule_fetch(Duration::ZERO);
+        }
+        self.dirty = true;
+    }
+
+    pub fn reload_config(&mut self) -> Result<(), String> {
+        let stamp = Config::stamp();
+        let base = Config::load().map_err(|e| format!("{e:#}"))?;
+        self.config_stamp = stamp;
+        let mut cfg = base.clone();
+        crate::overrides::apply(&mut cfg);
+        self.base = base;
+        let old = std::mem::replace(&mut self.cfg, cfg);
+        self.apply_changes(&old);
+        self.notify("Settings reloaded");
+        Ok(())
     }
 
     pub fn on_event(&mut self, ev: Event) {
@@ -726,6 +870,7 @@ impl App {
                     SettingsOutcome::Close => self.set_overlay(Overlay::None),
                     SettingsOutcome::Changed => self.apply_config(&old),
                     SettingsOutcome::Action(a) => self.settings_action(a),
+                    SettingsOutcome::Locked(m) => self.notify(m),
                 }
                 return;
             }
@@ -802,6 +947,7 @@ impl App {
                             }
                             self.set_overlay(Overlay::None);
                             self.temporary = None;
+                            self.selection += 1;
                             self.schedule_fetch(Duration::ZERO);
                             self.notify("Picking the best sync automatically");
                         }
@@ -1097,9 +1243,39 @@ impl App {
 
     pub fn apply_config(&mut self, old: &Config) {
         let json = |v: &dyn erased::Json| v.json();
-        if let Err(e) = self.cfg.save() {
+        let wanted = json(&self.cfg);
+        crate::overrides::apply(&mut self.cfg);
+        if json(&self.cfg) != wanted {
+            self.notify("That setting is locked by a launch flag for this session");
+        }
+        let file = crate::overrides::persisted(&self.cfg, &self.base);
+        if let Err(e) = file.save() {
             self.notify(format!("Could not save settings: {e}"));
         }
+        self.base = file;
+        self.config_stamp = Config::stamp();
+        self.apply_changes(old);
+    }
+
+    fn watch_config(&mut self, now: Instant) {
+        if !self.cfg.general.live_reload || now < self.next_config_check {
+            return;
+        }
+        self.next_config_check = now + CONFIG_CHECK_EVERY;
+        let stamp = Config::stamp();
+        if stamp == self.config_stamp {
+            return;
+        }
+        self.config_stamp = stamp;
+        if stamp.is_some()
+            && let Err(e) = self.reload_config()
+        {
+            self.notify(format!("The config file has a mistake, keeping the current settings: {e}"));
+        }
+    }
+
+    fn apply_changes(&mut self, old: &Config) {
+        let json = |v: &dyn erased::Json| v.json();
         let providers_changed = json(&self.cfg.providers) != json(&old.providers);
         if providers_changed {
             self.registry = Registry::from_config(&self.cfg, &self.client);
@@ -1242,6 +1418,7 @@ impl App {
             (Source::Clipboard, false) => "Reading the clipboard",
             (Source::File(_), _) => "Reading the file",
             (Source::Url(_), _) => "Downloading",
+            (Source::Stdin, _) => "Reading the lyrics",
         };
         let client = self.client.clone();
         let lib = self.library.clone();
@@ -1260,6 +1437,7 @@ impl App {
         };
         let client = self.client.clone();
         let lib = self.library.clone();
+        let selection = self.selection;
         self.spawn_library("Loading", async move {
             let lyrics = lib.load(&entry, &client, q.duration).await?;
             let key = q.key();
@@ -1272,6 +1450,7 @@ impl App {
                     lyrics,
                     manual: true,
                 },
+                selection,
             })
         });
     }
@@ -1289,6 +1468,7 @@ impl App {
     }
 
     fn show_now(&mut self, resolution: Resolution) {
+        self.selection += 1;
         self.generation += 1;
         self.fetch_due = None;
         self.install(resolution);
@@ -1349,21 +1529,30 @@ impl App {
                 }
                 self.notify(msg);
             }
-            LibraryDone::Applied { identity, key, resolution } => {
+            LibraryDone::Applied {
+                identity,
+                key,
+                resolution,
+                selection,
+            } => {
                 let title = resolution.candidate.title.clone();
                 self.state.choices.insert(key, resolution.candidate.clone());
                 self.state.save();
-                if self.track_identity.as_deref() == Some(identity.as_str()) {
+                let current = self.track_identity.as_deref() == Some(identity.as_str());
+                let newer = selection != self.selection;
+                if current && !newer {
                     self.temporary = None;
                     self.show_now(resolution);
                 }
                 if open {
                     self.close_library();
                 }
-                self.notify(if local_on {
-                    format!("Using “{title}” from the local library for this track")
-                } else {
+                self.notify(if !local_on {
                     "Chosen, but the Local library provider is off: Esc → Providers".to_string()
+                } else if current && newer {
+                    format!("Saved “{title}” as the choice for this track, keeping the lyrics picked since")
+                } else {
+                    format!("Using “{title}” from the local library for this track")
                 });
             }
             LibraryDone::Removed(entry) => {
@@ -1922,41 +2111,20 @@ impl App {
     }
 }
 
-async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
-    let text = match req.pasted {
+pub async fn import(mut req: ImportRequest, client: reqwest::Client, lib: Library) -> Result<LibraryDone, String> {
+    let text = match req.pasted.take() {
         Some(p) => p,
         None => library::read_source(&req.source, &client).await?,
     };
     if text.len() > library::MAX_BYTES {
         return Err("the lyrics are larger than 8 MB".into());
     }
+    if req.temporary {
+        return temporary_import(req, &text);
+    }
     let (lyrics, detected) = library::parse(&text, &req.source, req.format, req.track.duration)?;
     let warning = library::title_warning(&text, detected, &req.track);
     let key = req.track.key();
-    if req.temporary {
-        let candidate = Candidate {
-            provider: crate::providers::local::ID.into(),
-            id: TEMPORARY_ID.into(),
-            title: req.track.title.clone(),
-            artists: req.track.artists.clone(),
-            album: req.track.album.clone(),
-            duration: req.track.duration,
-            tier: Some(MatchTier::Exact),
-            kind_hint: Some(lyrics.kind),
-            note: Some(format!("temporary {} {}", req.source.label(), req.source.name())),
-        };
-        return Ok(LibraryDone::Imported {
-            identity: req.identity,
-            key,
-            resolution: Resolution {
-                candidate,
-                lyrics,
-                manual: true,
-            },
-            temporary: true,
-            warning,
-        });
-    }
     let now = library::now();
     let entry = Entry {
         id: Library::id_for(&key),
@@ -1988,6 +2156,36 @@ async fn import(req: ImportRequest, client: reqwest::Client, lib: Library) -> Re
     })
 }
 
+pub fn temporary_import(req: ImportRequest, text: &str) -> Result<LibraryDone, String> {
+    if text.len() > library::MAX_BYTES {
+        return Err("the lyrics are larger than 8 MB".into());
+    }
+    let (lyrics, detected) = library::parse(text, &req.source, req.format, req.track.duration)?;
+    let warning = library::title_warning(text, detected, &req.track);
+    let candidate = Candidate {
+        provider: crate::providers::local::ID.into(),
+        id: TEMPORARY_ID.into(),
+        title: req.track.title.clone(),
+        artists: req.track.artists.clone(),
+        album: req.track.album.clone(),
+        duration: req.track.duration,
+        tier: Some(MatchTier::Exact),
+        kind_hint: Some(lyrics.kind),
+        note: Some(format!("temporary {} {}", req.source.label(), req.source.name())),
+    };
+    Ok(LibraryDone::Imported {
+        identity: req.identity,
+        key: req.track.key(),
+        resolution: Resolution {
+            candidate,
+            lyrics,
+            manual: true,
+        },
+        temporary: true,
+        warning,
+    })
+}
+
 mod erased {
     pub trait Json {
         fn json(&self) -> String;
@@ -2007,7 +2205,7 @@ mod tests {
     fn app() -> App {
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(Config::default(), TermCaps::default(), player_tx, msg_tx);
+        let mut app = App::new(Config::default(), Config::stamp(), TermCaps::default(), player_tx, msg_tx);
         app.guide = Some(Onboarding::new(false));
         app.guide_go(Step::Player);
         app
@@ -2227,6 +2425,87 @@ mod tests {
         press(&mut app, KeyCode::Enter);
         assert!(app.quit);
         assert_eq!(app.restart_into, Some(path));
+    }
+
+    #[tokio::test]
+    async fn a_slow_library_pick_keeps_lyrics_chosen_after_it_started() {
+        let state = std::env::temp_dir().join(format!("lyrminal-state-test-{}.json", std::process::id()));
+        crate::config::set_state_file(state.clone());
+        let mut app = app();
+        app.guide = None;
+        app.on_player(snapshot());
+        let started = app.selection;
+        let newer = crate::ipc::TemporaryLyrics {
+            text: "[00:01.00]newer\n".into(),
+            source: Source::Stdin,
+            format: None,
+        };
+        assert_eq!(app.load_temporary(newer)["ok"], true);
+        let applied = |app: &App, text: &str, selection: u64| {
+            let (lyrics, _) = library::parse(text, &Source::Clipboard, None, Some(30.0)).unwrap();
+            AppMsg::Library {
+                seq: u64::MAX,
+                result: Ok(LibraryDone::Applied {
+                    identity: app.track_identity.clone().unwrap(),
+                    key: app.track_key().unwrap(),
+                    resolution: Resolution {
+                        candidate: Candidate {
+                            provider: crate::providers::local::ID.into(),
+                            id: "older".into(),
+                            title: "Tour Song".into(),
+                            artists: vec!["Nobody".into()],
+                            album: None,
+                            duration: Some(30.0),
+                            tier: None,
+                            kind_hint: None,
+                            note: None,
+                        },
+                        lyrics,
+                        manual: true,
+                    },
+                    selection,
+                }),
+            }
+        };
+        let shown = |app: &App| app.prepared().map(|(p, _)| p.lyrics.lines[0].lead.text());
+        let msg = applied(&app, "[00:01.00]older\n", started);
+        app.on_msg(msg);
+        assert_eq!(shown(&app).as_deref(), Some("newer"));
+        assert!(app.temporary.is_some());
+        assert!(app.state.choices.get(&app.track_key().unwrap()).is_some_and(|c| c.id == "older"));
+        let msg = applied(&app, "[00:01.00]picked now\n", app.selection);
+        app.on_msg(msg);
+        assert_eq!(shown(&app).as_deref(), Some("picked now"));
+        assert!(app.temporary.is_none());
+        let _ = std::fs::remove_file(state);
+    }
+
+    #[tokio::test]
+    async fn library_changes_during_a_lookup_start_it_again() {
+        let mut app = app();
+        app.guide = None;
+        app.on_player(snapshot());
+        app.lyrics = LyricsState::Loading;
+        let before = app.generation;
+        app.library_changed(&crate::ipc::LibraryChange {
+            changed: vec!["abc".into()],
+            ..Default::default()
+        });
+        assert!(app.generation > before);
+        assert!(matches!(app.lyrics, LyricsState::Waiting));
+        app.on_msg(AppMsg::Resolved {
+            generation: before,
+            outcome: Outcome {
+                result: None,
+                attempts: Vec::new(),
+                rate_limits: Vec::new(),
+            },
+        });
+        assert!(matches!(app.lyrics, LyricsState::Waiting));
+        let quiet = app.generation;
+        app.lyrics = LyricsState::Loading;
+        app.library_changed(&crate::ipc::LibraryChange::default());
+        assert_eq!(app.generation, quiet);
     }
 
     #[tokio::test]

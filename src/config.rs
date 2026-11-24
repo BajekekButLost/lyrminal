@@ -21,6 +21,19 @@ pub struct Config {
     pub controls: ControlsConfig,
     pub cache: CacheConfig,
     pub updates: UpdatesConfig,
+    pub general: GeneralConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct GeneralConfig {
+    pub live_reload: bool,
+}
+
+impl Default for GeneralConfig {
+    fn default() -> Self {
+        Self { live_reload: true }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -513,6 +526,11 @@ impl Preset {
 }
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
+static STATE_FILE: OnceLock<PathBuf> = OnceLock::new();
+static CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+static LIBRARY_DIR: OnceLock<PathBuf> = OnceLock::new();
+static SOCKET: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
@@ -520,6 +538,61 @@ pub fn set_base_dir(dir: PathBuf) {
 
 pub fn base_dir() -> Option<&'static Path> {
     BASE_DIR.get().map(PathBuf::as_path)
+}
+
+pub fn set_config_file(path: PathBuf) {
+    let _ = CONFIG_FILE.set(path);
+}
+
+pub fn set_state_file(path: PathBuf) {
+    let _ = STATE_FILE.set(path);
+}
+
+pub fn state_file() -> PathBuf {
+    STATE_FILE.get().cloned().unwrap_or_else(|| state_dir().join("state.json"))
+}
+
+pub fn set_cache_dir(dir: PathBuf) {
+    let _ = CACHE_DIR.set(dir);
+}
+
+pub fn set_library_dir(dir: PathBuf) {
+    let _ = LIBRARY_DIR.set(dir);
+}
+
+pub fn library_dir() -> PathBuf {
+    LIBRARY_DIR.get().cloned().unwrap_or_else(|| data_dir().join("library"))
+}
+
+pub fn set_socket(path: PathBuf) {
+    let _ = SOCKET.set(path);
+}
+
+pub fn socket_path() -> PathBuf {
+    if let Some(path) = SOCKET.get() {
+        return path.clone();
+    }
+    match (base_dir(), dirs::runtime_dir()) {
+        (None, Some(run)) => run.join("lyrminal.sock"),
+        _ => state_dir().join("lyrminal.sock"),
+    }
+}
+
+pub fn relaunch_args() -> Vec<std::ffi::OsString> {
+    let mut args: Vec<std::ffi::OsString> = Vec::new();
+    let mut add = |flag: &str, value: Option<&PathBuf>| {
+        if let Some(v) = value {
+            args.push(flag.into());
+            args.push(v.into());
+        }
+    };
+    add("--base-directory", BASE_DIR.get());
+    add("--config", CONFIG_FILE.get());
+    add("--state-file", STATE_FILE.get());
+    add("--cache-dir", CACHE_DIR.get());
+    add("--library-dir", LIBRARY_DIR.get());
+    add("--socket", SOCKET.get());
+    args
 }
 
 fn user_dir(base_rel: &str, system: Option<PathBuf>) -> PathBuf {
@@ -535,6 +608,9 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn cache_dir() -> PathBuf {
+    if let Some(dir) = CACHE_DIR.get() {
+        return dir.clone();
+    }
     user_dir(".cache", dirs::cache_dir().or_else(|| Some(std::env::temp_dir())))
 }
 
@@ -574,7 +650,12 @@ pub fn create_temp_base_dir() -> Result<PathBuf> {
 
 impl Config {
     pub fn path() -> PathBuf {
-        config_dir().join("config.json")
+        CONFIG_FILE.get().cloned().unwrap_or_else(|| config_dir().join("config.json"))
+    }
+
+    pub fn stamp() -> Option<(std::time::SystemTime, u64)> {
+        let meta = fs::metadata(Self::path()).ok()?;
+        Some((meta.modified().ok()?, meta.len()))
     }
 
     pub fn load() -> Result<Self> {

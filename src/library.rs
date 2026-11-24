@@ -19,6 +19,7 @@ pub enum Source {
     File(String),
     Url(String),
     Clipboard,
+    Stdin,
 }
 
 impl Source {
@@ -27,6 +28,7 @@ impl Source {
             Source::File(_) => "file",
             Source::Url(_) => "URL",
             Source::Clipboard => "clipboard",
+            Source::Stdin => "stdin",
         }
     }
 
@@ -41,13 +43,14 @@ impl Source {
                 rest.split(['/', '?', '#']).next().unwrap_or(rest).to_string()
             }
             Source::Clipboard => "clipboard".into(),
+            Source::Stdin => "stdin".into(),
         }
     }
 
     pub fn location(&self) -> Option<&str> {
         match self {
             Source::File(p) | Source::Url(p) => Some(p),
-            Source::Clipboard => None,
+            Source::Clipboard | Source::Stdin => None,
         }
     }
 
@@ -56,7 +59,7 @@ impl Source {
     }
 
     pub fn can_watch(&self) -> bool {
-        !matches!(self, Source::Clipboard)
+        !matches!(self, Source::Clipboard | Source::Stdin)
     }
 }
 
@@ -133,11 +136,12 @@ pub fn expand_path(input: &str) -> PathBuf {
     } else {
         PathBuf::from(input)
     };
-    if path.is_absolute() {
+    let path = if path.is_absolute() {
         path
     } else {
         std::env::current_dir().map(|d| d.join(&path)).unwrap_or(path)
-    }
+    };
+    path.components().filter(|c| *c != std::path::Component::CurDir).collect()
 }
 
 pub fn parse(text: &str, source: &Source, format: Option<Format>, duration: Option<f64>) -> Result<(Lyrics, Format), String> {
@@ -264,6 +268,7 @@ pub async fn read_source(source: &Source, client: &reqwest::Client) -> Result<St
         Source::File(p) => read_capped(&expand_path(p)).await?,
         Source::Url(u) => fetch_url(client, u).await?,
         Source::Clipboard => return read_clipboard().await,
+        Source::Stdin => return Err("stdin can only be read when the lyrics are added".into()),
     };
     Ok(formats::decode(&bytes))
 }
@@ -275,7 +280,7 @@ pub struct Library {
 
 impl Default for Library {
     fn default() -> Self {
-        Self::new(crate::config::data_dir().join("library"))
+        Self::new(crate::config::library_dir())
     }
 }
 

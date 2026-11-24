@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::state_dir;
+use crate::config::state_file;
 use crate::providers::Candidate;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,7 +26,7 @@ pub struct State {
 
 impl State {
     pub fn path() -> PathBuf {
-        state_dir().join("state.json")
+        state_file()
     }
 
     pub fn load() -> Self {
