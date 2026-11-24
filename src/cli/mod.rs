@@ -37,6 +37,8 @@ pub struct LaunchArgs {
     pub set: Vec<String>,
     #[arg(long, value_name = "cell|pixel", help = "Use this renderer for this session")]
     pub renderer: Option<String>,
+    #[arg(long, value_name = "spring|bloom", help = "Use this animation style for this session")]
+    pub style: Option<String>,
 }
 
 impl LaunchArgs {
@@ -44,6 +46,9 @@ impl LaunchArgs {
         let mut out = Vec::new();
         if let Some(v) = &self.renderer {
             out.push(("--renderer", "appearance.renderer", v.clone()));
+        }
+        if let Some(v) = &self.style {
+            out.push(("--style", "appearance.style", v.clone()));
         }
         out
     }
