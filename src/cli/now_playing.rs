@@ -24,6 +24,16 @@ pub struct NowPlayingArgs {
     pub json: bool,
     #[arg(long, help = "Print nothing and exit with code 3 when nothing is playing or there are no lyrics")]
     pub strict: bool,
+    #[arg(short, long, help = "Keep running and print a new line whenever the track, status, line or word changes")]
+    pub watch: bool,
+    #[arg(
+        long,
+        requires = "watch",
+        value_name = "MS",
+        value_parser = clap::value_parser!(u64).range(50..),
+        help = "With --watch, also print every MS milliseconds, e.g. to keep the position up to date"
+    )]
+    pub interval: Option<u64>,
 }
 
 pub const EMPTY_EXIT: i32 = 3;
@@ -184,7 +194,58 @@ impl NowPlayingArgs {
     }
 }
 
+fn steady(data: &Value) -> Value {
+    let mut data = data.clone();
+    for key in ["position", "progress", "offset"] {
+        data[key] = Value::from(0);
+    }
+    data
+}
+
+impl NowPlayingArgs {
+    fn shown(&self, data: &Value) -> String {
+        if self.strict && empty_reason(data).is_some() { String::new() } else { self.line(data) }
+    }
+}
+
+async fn watch(args: NowPlayingArgs) -> i32 {
+    let interval = args.interval.map(std::time::Duration::from_millis);
+    let poll = interval.map_or(POLL, |i| i.min(POLL));
+    let path = crate::config::socket_path();
+    let mut client: Option<ipc::Client> = None;
+    let mut last: Option<String> = None;
+    let mut printed_at = std::time::Instant::now();
+    loop {
+        if client.is_none() {
+            client = ipc::Client::connect(&path).await.ok();
+        }
+        let answer = match client.as_mut() {
+            Some(c) => c.call(&Request::NowPlaying).await,
+            None => Err(ipc::NOT_RUNNING.to_string()),
+        };
+        let (line, key) = match answer {
+            Ok(data) => (args.shown(&data), args.shown(&steady(&data))),
+            Err(_) => {
+                client = None;
+                (String::new(), String::new())
+            }
+        };
+        let due = interval.is_some_and(|i| printed_at.elapsed() >= i);
+        if last.as_ref() != Some(&key) || due {
+            println!("{line}");
+            last = Some(key);
+            printed_at = std::time::Instant::now();
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
+const POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 pub async fn run(args: NowPlayingArgs) -> i32 {
+    if args.watch {
+        return watch(args).await;
+    }
     match ipc::call(&Request::NowPlaying).await {
         Ok(data) => {
             if args.strict
