@@ -18,6 +18,8 @@ pub struct NowPlayingArgs {
     pub fields: Vec<Field>,
     #[arg(long, conflicts_with = "fields", help = "Print every field: album, line numbers, progress, word, sync and provider too")]
     pub full: bool,
+    #[arg(long, help = "Print unformatted values (seconds, progress from 0 to 1) separated by tabs")]
+    pub raw: bool,
 }
 
 impl NowPlayingArgs {
@@ -120,15 +122,27 @@ pub fn format(data: &Value, field: Field) -> String {
     }
 }
 
-pub fn render(data: &Value, fields: &[Field], separator: &str) -> String {
-    fields.iter().map(|f| format(data, *f)).collect::<Vec<_>>().join(separator)
+pub fn raw(data: &Value, field: Field) -> String {
+    let text = match field {
+        Field::Time => format!("{}/{}", plain(&data["position"]), plain(&data["length"])),
+        f => plain(&data[f.key()]),
+    };
+    text.replace(['\t', '\n', '\r'], " ")
+}
+
+pub fn render(data: &Value, fields: &[Field], separator: &str, unformatted: bool) -> String {
+    fields
+        .iter()
+        .map(|f| if unformatted { raw(data, *f) } else { format(data, *f) })
+        .collect::<Vec<_>>()
+        .join(separator)
 }
 
 pub async fn run(args: NowPlayingArgs) -> i32 {
-    let separator = args.separator.as_deref().unwrap_or(" · ");
+    let separator = args.separator.as_deref().unwrap_or(if args.raw { "\t" } else { " · " });
     match ipc::call(&Request::NowPlaying).await {
         Ok(data) => {
-            println!("{}", render(&data, &args.fields(), separator));
+            println!("{}", render(&data, &args.fields(), separator, args.raw));
             0
         }
         Err(e) => {
@@ -150,8 +164,12 @@ mod tests {
             "position": 83.4, "length": 3725.0, "text": "Oakland, Oakland", "progress": 0.426, "line": 12
         });
         assert_eq!(
-            render(&data, COMPACT, " · "),
+            render(&data, COMPACT, " · ", false),
             "playing · Childish Gambino · III. Telegraph Ave. · 1:23/1:02:05 · Oakland, Oakland"
+        );
+        assert_eq!(
+            render(&data, &[Field::Position, Field::Progress, Field::Time, Field::Text], "\t", true),
+            "83.4\t0.426\t83.4/3725.0\tOakland, Oakland"
         );
         assert_eq!(format(&data, Field::Progress), "43%");
         assert_eq!(format(&data, Field::Line), "12");
