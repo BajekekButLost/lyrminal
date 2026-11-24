@@ -1,3 +1,4 @@
+mod now_playing;
 mod paths;
 mod providers;
 mod settings;
@@ -51,6 +52,8 @@ pub enum Command {
     Settings(settings::SettingsArgs),
     #[command(about = "Order, turn on/off and configure the lyrics providers")]
     Providers(providers::ProvidersArgs),
+    #[command(about = "Show what the running Lyrminal is playing and where it is in the lyrics")]
+    NowPlaying(now_playing::NowPlayingArgs),
 }
 
 pub fn non_empty(s: &str) -> Result<String, String> {
@@ -120,5 +123,6 @@ pub async fn run(command: Command) -> i32 {
         Command::Paths(args) => paths::run(args),
         Command::Settings(args) => settings::run(args),
         Command::Providers(args) => providers::run(args),
+        Command::NowPlaying(args) => now_playing::run(args).await,
     }
 }
