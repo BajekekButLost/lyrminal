@@ -550,6 +550,13 @@ pub fn library_dir() -> PathBuf {
     LIBRARY_DIR.get().cloned().unwrap_or_else(|| data_dir().join("library"))
 }
 
+pub fn socket_path() -> PathBuf {
+    match (base_dir(), dirs::runtime_dir()) {
+        (None, Some(run)) => run.join("lyrminal.sock"),
+        _ => state_dir().join("lyrminal.sock"),
+    }
+}
+
 pub fn relaunch_args() -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     let mut add = |flag: &str, value: Option<&PathBuf>| {

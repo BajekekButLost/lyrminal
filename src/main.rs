@@ -2,8 +2,10 @@ mod anim;
 mod app;
 mod cli;
 mod config;
+mod ipc;
 mod library;
 mod lyrics;
+mod now_playing;
 mod player;
 mod providers;
 mod render;
@@ -114,13 +116,17 @@ async fn main() -> Result<()> {
 
     let (player_tx, player_rx) = player::spawn(cfg.player.clone());
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
+    let (ipc_tx, ipc_rx) = mpsc::unbounded_channel();
+    let server = ipc::serve(config::socket_path(), ipc_tx);
     let mut app = App::new(cfg, caps, player_tx, msg_tx);
     app.maybe_onboard(fresh);
     app.enable_update_checks();
     let mut gfx = Graphics::default();
     let mut backdrop = term::Backdrop::default();
 
-    let result = run(&mut terminal, &mut app, &mut gfx, &mut backdrop, player_rx, msg_rx, &mut mouse).await;
+    let channels = Channels { player_rx, msg_rx, ipc_rx };
+    let result = run(&mut terminal, &mut app, &mut gfx, &mut backdrop, channels, &mut mouse).await;
+    drop(server);
 
     let mut out = std::io::stdout();
     let _ = gfx.clear(&mut out);
@@ -145,15 +151,25 @@ async fn main() -> Result<()> {
     result
 }
 
+struct Channels {
+    player_rx: mpsc::UnboundedReceiver<player::PlayerEvent>,
+    msg_rx: mpsc::UnboundedReceiver<app::AppMsg>,
+    ipc_rx: mpsc::UnboundedReceiver<ipc::Incoming>,
+}
+
 async fn run(
     terminal: &mut DefaultTerminal,
     app: &mut App,
     gfx: &mut Graphics,
     backdrop: &mut term::Backdrop,
-    mut player_rx: mpsc::UnboundedReceiver<player::PlayerEvent>,
-    mut msg_rx: mpsc::UnboundedReceiver<app::AppMsg>,
+    channels: Channels,
     mouse: &mut bool,
 ) -> Result<()> {
+    let Channels {
+        mut player_rx,
+        mut msg_rx,
+        mut ipc_rx,
+    } = channels;
     let mut events = EventStream::new();
     let mut next_frame = tokio::time::Instant::now();
     let mut last_area = None;
@@ -166,6 +182,7 @@ async fn run(
             },
             Some(ev) = player_rx.recv() => app.on_player(ev),
             Some(m) = msg_rx.recv() => app.on_msg(m),
+            Some(m) = ipc_rx.recv() => app.on_ipc(m),
         }
         let now = Instant::now();
         app.tick(now);

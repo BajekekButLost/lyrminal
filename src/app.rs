@@ -669,6 +669,13 @@ impl App {
         }
     }
 
+    pub fn on_ipc(&mut self, msg: crate::ipc::Incoming) {
+        let answer = match msg.request {
+            crate::ipc::Request::NowPlaying => crate::ipc::ok(crate::now_playing::snapshot(self, Instant::now())),
+        };
+        let _ = msg.reply.send(answer);
+    }
+
     pub fn on_event(&mut self, ev: Event) {
         self.dirty = true;
         match ev {
