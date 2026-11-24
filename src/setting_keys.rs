@@ -125,7 +125,11 @@ fn number(v: f64, decimals: usize) -> String {
 }
 
 fn range(min: f64, max: f64, decimals: usize, unit: &str) -> String {
-    let r = format!("{} and {}", number(min, decimals), number(max, decimals));
+    span(min, max, decimals, unit, "and")
+}
+
+fn span(min: f64, max: f64, decimals: usize, unit: &str, word: &str) -> String {
+    let r = format!("{} {word} {}", number(min, decimals), number(max, decimals));
     if unit.is_empty() { r } else { format!("{r} {unit}") }
 }
 
@@ -181,7 +185,7 @@ pub fn allowed(item: &Item) -> String {
             decimals,
             unit,
             ..
-        } => format!("{}, in steps of {} in the app", range(*min, *max, *decimals, unit), number(*step, *decimals)),
+        } => format!("{}, in steps of {} in the app", span(*min, *max, *decimals, unit, "to"), number(*step, *decimals)),
         Kind::Text { folder: true, .. } => "a folder".into(),
         Kind::Text { secret: true, .. } => "a secret key".into(),
         Kind::Text { .. } => "any text".into(),

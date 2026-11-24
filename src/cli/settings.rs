@@ -22,6 +22,16 @@ pub enum SettingsCommand {
     Toggle(KeysArgs),
     #[command(about = "Put settings back to their defaults; keys can also come from stdin")]
     Reset(ResetArgs),
+    #[command(about = "Explain a setting: what it does, the values it takes and its default")]
+    Info(InfoArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct InfoArgs {
+    #[arg(help = "The setting's key, e.g. appearance.fontScale")]
+    pub key: String,
+    #[arg(long, help = "Print the details as JSON")]
+    pub json: bool,
 }
 
 #[derive(Args, Debug)]
@@ -189,6 +199,38 @@ fn reset(args: ResetArgs) -> i32 {
     0
 }
 
+pub fn print_info(s: &Setting, json: bool) {
+    let cfg = super::load_config();
+    let defaults = Config::default();
+    if json {
+        let info = json!({
+            "key": s.key(),
+            "group": s.group,
+            "label": s.item.label,
+            "description": s.item.desc,
+            "type": setting_keys::kind_name(&s.item),
+            "values": setting_keys::allowed(&s.item),
+            "value": setting_keys::json_value(&cfg, &s.item, false),
+            "default": setting_keys::json_value(&defaults, &s.item, false),
+        });
+        println!("{}", serde_json::to_string_pretty(&info).unwrap_or_default());
+        return;
+    }
+    let empty = |v: String| if v.is_empty() { "(empty)".to_string() } else { v };
+    println!("{}", s.key());
+    println!("  Name     {} ({})", s.item.label, s.group);
+    println!("  Values   {}", setting_keys::allowed(&s.item));
+    println!("  Value    {}", empty(setting_keys::value(&cfg, &s.item, false)));
+    println!("  Default  {}", empty(setting_keys::value(&defaults, &s.item, false)));
+    println!();
+    println!("{}", s.item.desc);
+}
+
+fn info(args: InfoArgs) -> i32 {
+    print_info(&find(&args.key), args.json);
+    0
+}
+
 pub fn run(args: SettingsArgs) -> i32 {
     match args.command {
         SettingsCommand::List(a) => list(a),
@@ -196,5 +238,6 @@ pub fn run(args: SettingsArgs) -> i32 {
         SettingsCommand::Set(a) => set(a),
         SettingsCommand::Toggle(a) => toggle(a),
         SettingsCommand::Reset(a) => reset(a),
+        SettingsCommand::Info(a) => info(a),
     }
 }
