@@ -34,6 +34,8 @@ These change a setting for one session only. The app shows such a setting with a
 | `--offset <MS>` | Use this global sync offset. Positive shows lines earlier |
 | `--no-controls` | Stay read-only: no play, pause, seek or skip |
 
+On/off settings need `on` or `off` here; `toggle` isn't accepted. A temporary Spicy Lyrics `apiKey` also locks "Use your own key", which it turns on.
+
 Temporary settings only work when starting the app, not with a command. When the in-app updater restarts Lyrminal, they are passed on to the new version.
 
 ## Global options
@@ -268,6 +270,6 @@ Builds running from a `cargo build` `target/` folder don't update themselves. A 
 
 While the app runs, it listens on a socket. By default this is `$XDG_RUNTIME_DIR/lyrminal.sock`, or `lyrminal.sock` in the state folder when there's no runtime folder or a base directory is in use. `now-playing`, `library use` and `library add --temporary` ask the app through it. After `settings`, `providers` and `library` commands, the app is told to reload, so changes show up right away. Use `--socket`, or the same `--base-directory`, to talk to an app started with another one.
 
-When a second Lyrminal starts while one is running, the first keeps the socket.
+When a second Lyrminal starts while one is running, the first keeps the socket. A leftover socket from an app that crashed is replaced, but anything else at that path, such as a regular file, is left alone, and the app then doesn't listen at all.
 
 The app also reloads `config.json` on its own when the file changes, for example after you save it in an editor. Turn that off in Settings → About → Live reload config (`general.liveReload`). A file with a mistake is ignored, and the app keeps its current settings until you fix it.
