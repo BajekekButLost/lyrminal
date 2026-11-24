@@ -27,6 +27,14 @@ pub enum LibraryCommand {
     Update(UpdateArgs),
     #[command(about = "Remove saved syncs; ids can also come from stdin")]
     Remove(RemoveArgs),
+    #[command(about = "Use a saved sync for the song the running app is playing")]
+    Use(UseArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct UseArgs {
+    #[arg(help = "The sync's id, or the start of it (see library list); leave it out or use - to read it from stdin")]
+    pub id: Option<String>,
 }
 
 #[derive(Args, Debug)]
@@ -494,6 +502,18 @@ fn remove(args: RemoveArgs) -> i32 {
     0
 }
 
+async fn use_entry(args: UseArgs) -> i32 {
+    let id = super::read_value(args.id, "library use");
+    let entry = find(&Library::default(), &id);
+    match crate::ipc::call(&crate::ipc::Request::UseEntry { id: entry.id.clone() }).await {
+        Ok(_) => {
+            println!("Using {} ({}) for the playing song", describe(&entry.track), &entry.id[..SHORT_ID]);
+            0
+        }
+        Err(e) => super::fail(e),
+    }
+}
+
 pub async fn run(args: LibraryArgs) -> i32 {
     match args.command {
         LibraryCommand::List(a) => list(a),
@@ -501,6 +521,7 @@ pub async fn run(args: LibraryArgs) -> i32 {
         LibraryCommand::Add(a) => add(a).await,
         LibraryCommand::Update(a) => update(a).await,
         LibraryCommand::Remove(a) => remove(a),
+        LibraryCommand::Use(a) => use_entry(a).await,
     }
 }
 

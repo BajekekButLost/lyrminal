@@ -14,6 +14,7 @@ pub enum Request {
     ReloadConfig,
     LibraryChanged(LibraryChange),
     Temporary(TemporaryLyrics),
+    UseEntry { id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

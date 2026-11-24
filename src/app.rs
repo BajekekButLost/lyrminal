@@ -671,6 +671,7 @@ impl App {
 
     pub fn on_ipc(&mut self, msg: crate::ipc::Incoming) {
         let answer = match msg.request {
+            crate::ipc::Request::UseEntry { id } => return self.use_entry(&id, msg.reply),
             crate::ipc::Request::NowPlaying => crate::ipc::ok(crate::now_playing::snapshot(self, Instant::now())),
             crate::ipc::Request::ReloadConfig => match self.reload_config() {
                 Ok(()) => crate::ipc::ok(serde_json::json!({})),
@@ -683,6 +684,46 @@ impl App {
             crate::ipc::Request::Temporary(t) => self.load_temporary(t),
         };
         let _ = msg.reply.send(answer);
+    }
+
+    fn use_entry(&mut self, id: &str, reply: tokio::sync::oneshot::Sender<serde_json::Value>) {
+        let Some(entry) = self.library.get(id) else {
+            let _ = reply.send(crate::ipc::error(format!("there is no sync with the id {id} in the library")));
+            return;
+        };
+        let Some(track) = self.playing_track() else {
+            let _ = reply.send(crate::ipc::error("nothing is playing"));
+            return;
+        };
+        let (q, identity) = (track.query(), track.identity_key());
+        let client = self.client.clone();
+        let lib = self.library.clone();
+        let tx = self.msg_tx.clone();
+        tokio::spawn(async move {
+            match lib.load(&entry, &client, q.duration).await {
+                Ok(lyrics) => {
+                    let key = q.key();
+                    let tier = if entry.key == key { MatchTier::Exact } else { MatchTier::Related };
+                    let done = LibraryDone::Applied {
+                        identity,
+                        key,
+                        resolution: Resolution {
+                            candidate: crate::providers::local::entry_candidate(&entry, Some(tier)),
+                            lyrics,
+                            manual: true,
+                        },
+                    };
+                    let _ = tx.send(AppMsg::Library {
+                        seq: u64::MAX,
+                        result: Ok(done),
+                    });
+                    let _ = reply.send(crate::ipc::ok(serde_json::json!({ "title": entry.track.title })));
+                }
+                Err(e) => {
+                    let _ = reply.send(crate::ipc::error(e));
+                }
+            }
+        });
     }
 
     fn playing_track(&self) -> Option<&TrackMeta> {
