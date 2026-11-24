@@ -2135,6 +2135,9 @@ pub async fn import(mut req: ImportRequest, client: reqwest::Client, lib: Librar
 }
 
 pub fn temporary_import(req: ImportRequest, text: &str) -> Result<LibraryDone, String> {
+    if text.len() > library::MAX_BYTES {
+        return Err("the lyrics are larger than 8 MB".into());
+    }
     let (lyrics, detected) = library::parse(text, &req.source, req.format, req.track.duration)?;
     let warning = library::title_warning(text, detected, &req.track);
     let candidate = Candidate {

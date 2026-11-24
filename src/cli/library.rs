@@ -224,6 +224,9 @@ async fn add_temporary(source: Source, pasted: Option<String>, format: Option<Fo
             .await
             .unwrap_or_else(|e| super::fail(e)),
     };
+    if text.len() > crate::library::MAX_BYTES {
+        super::fail("the lyrics are larger than 8 MB");
+    }
     let request = crate::ipc::Request::Temporary(crate::ipc::TemporaryLyrics { text, source, format });
     match crate::ipc::call(&request).await {
         Ok(v) => {
