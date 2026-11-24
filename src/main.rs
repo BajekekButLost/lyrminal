@@ -36,7 +36,7 @@ const IDLE_FRAME: Duration = Duration::from_millis(250);
 
 fn setup_base(global: &cli::GlobalArgs) {
     if global.base_directory.is_some() && global.temp_base_directory {
-        let _ = cli::Cli::command()
+        cli::Cli::command()
             .error(
                 clap::error::ErrorKind::ArgumentConflict,
                 "use only one of --base-directory and --temp-base-directory",
@@ -90,7 +90,7 @@ fn file_arg(flag: &str, value: &str) -> std::path::PathBuf {
 async fn main() -> Result<()> {
     let args = cli::Cli::parse();
     if args.command.is_some() && args.launch.any() {
-        let _ = cli::Cli::command()
+        cli::Cli::command()
             .error(
                 clap::error::ErrorKind::ArgumentConflict,
                 "temporary settings only apply when starting the app, not to commands",
@@ -100,7 +100,7 @@ async fn main() -> Result<()> {
     match args.launch.overrides() {
         Ok(list) => overrides::set(list),
         Err(e) => {
-            let _ = cli::Cli::command().error(clap::error::ErrorKind::InvalidValue, e).exit();
+            cli::Cli::command().error(clap::error::ErrorKind::InvalidValue, e).exit();
         }
     }
     setup_base(&args.global);
