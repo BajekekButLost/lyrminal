@@ -12,6 +12,26 @@ pub struct UpdateArgs {
     pub check: bool,
     #[arg(long, conflicts_with = "check", help = "Build the release on this machine with cargo instead of downloading the prebuilt binary")]
     pub from_source: bool,
+    #[arg(long = "version", value_name = "vX.Y.Z", conflicts_with = "check", help = "Install this release instead of the latest, even an older one")]
+    pub version: Option<String>,
+}
+
+async fn pick(client: &reqwest::Client, args: &UpdateArgs) -> Result<Option<Release>, String> {
+    let Some(v) = &args.version else {
+        return update::check(client).await;
+    };
+    let tag = format!("v{}", v.trim().trim_start_matches(['v', 'V']));
+    if update::parse_version(&tag).is_none() {
+        return Err(format!("“{v}” is not a version like v1.2.3"));
+    }
+    match update::fetch(client, Some(&tag)).await? {
+        Some(r) if r.version == CURRENT => {
+            println!("Lyrminal v{CURRENT} is already installed");
+            Ok(None)
+        }
+        Some(r) => Ok(Some(r)),
+        None => Err(format!("there is no release {tag}")),
+    }
 }
 
 async fn build(client: &reqwest::Client, release: &Release) -> Result<std::path::PathBuf, String> {
@@ -70,7 +90,11 @@ async fn install_binary(client: &reqwest::Client, release: &Release) -> Result<s
 }
 
 fn describe(release: &Release) {
-    println!("Lyrminal v{} is out (you have v{CURRENT})", release.version);
+    if update::is_newer(&release.version, CURRENT) {
+        println!("Lyrminal v{} is out (you have v{CURRENT})", release.version);
+    } else {
+        println!("Lyrminal v{} (you have v{CURRENT})", release.version);
+    }
     if !release.summary.is_empty() {
         println!("{}", release.summary);
     }
@@ -85,8 +109,9 @@ pub async fn run(args: UpdateArgs) -> i32 {
         super::fail(e);
     }
     let client = crate::providers::http_client();
-    let release = match update::check(&client).await {
+    let release = match pick(&client, &args).await {
         Ok(Some(r)) => r,
+        Ok(None) if args.version.is_some() => return 0,
         Ok(None) => {
             println!("Lyrminal v{CURRENT} is up to date");
             return 0;
