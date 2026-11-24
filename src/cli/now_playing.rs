@@ -4,7 +4,10 @@ use serde_json::Value;
 use crate::ipc::{self, Request};
 
 #[derive(Args, Debug)]
-pub struct NowPlayingArgs {}
+pub struct NowPlayingArgs {
+    #[arg(short, long, value_name = "TEXT", help = "Put TEXT between the fields instead of \" · \"")]
+    pub separator: Option<String>,
+}
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -83,10 +86,11 @@ pub fn render(data: &Value, fields: &[Field], separator: &str) -> String {
     fields.iter().map(|f| format(data, *f)).collect::<Vec<_>>().join(separator)
 }
 
-pub async fn run(_args: NowPlayingArgs) -> i32 {
+pub async fn run(args: NowPlayingArgs) -> i32 {
+    let separator = args.separator.as_deref().unwrap_or(" · ");
     match ipc::call(&Request::NowPlaying).await {
         Ok(data) => {
-            println!("{}", render(&data, COMPACT, " · "));
+            println!("{}", render(&data, COMPACT, separator));
             0
         }
         Err(e) => {
