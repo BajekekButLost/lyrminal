@@ -333,17 +333,23 @@ fn set(args: SetArgs) -> i32 {
     0
 }
 
+pub fn reset_providers(cfg: &mut Config, list: &[&ProviderInfo]) {
+    for p in list {
+        for s in options_of(p) {
+            setting_keys::reset(cfg, &s.item);
+        }
+    }
+    let defaults = ordered_ids(&Config::default());
+    let chosen = |id: &str| list.iter().any(|p| p.id == id);
+    let mut ids: Vec<String> = ordered_ids(cfg).into_iter().filter(|id| !chosen(id)).collect();
+    for (want, id) in defaults.iter().enumerate().filter(|(_, id)| chosen(id)) {
+        ids.insert(want.min(ids.len()), id.clone());
+    }
+    cfg.providers.order = ids;
+}
+
 pub fn reset_provider(cfg: &mut Config, p: &ProviderInfo) {
-    for s in options_of(p) {
-        setting_keys::reset(cfg, &s.item);
-    }
-    let mut ids = ordered_ids(cfg);
-    let want = ordered_ids(&Config::default()).iter().position(|id| id == p.id);
-    if let (Some(want), Some(have)) = (want, ids.iter().position(|id| id == p.id)) {
-        let id = ids.remove(have);
-        ids.insert(want.min(ids.len()), id);
-        cfg.providers.order = ids;
-    }
+    reset_providers(cfg, &[p]);
 }
 
 fn reset(args: ResetArgs) -> i32 {
@@ -352,9 +358,8 @@ fn reset(args: ResetArgs) -> i32 {
         cfg.providers = Config::default().providers;
     } else {
         let names = super::read_list(args.providers, "provider");
-        for name in &names {
-            reset_provider(&mut cfg, provider(name));
-        }
+        let list: Vec<&ProviderInfo> = names.iter().map(|n| provider(n)).collect();
+        reset_providers(&mut cfg, &list);
     }
     super::save_config(&cfg);
     print_order(&cfg, false);
@@ -446,5 +451,23 @@ mod tests {
         assert_eq!(cfg.providers.lrclib.duration_tolerance_secs, 2.0);
         assert_eq!(cfg.providers.lrc_red.duration_tolerance_secs, 7.0);
         assert_eq!(option_name(lrclib, &find_option(lrclib, "duration-tolerance-secs").unwrap()), "durationToleranceSecs");
+    }
+
+    #[test]
+    fn resets_several_providers_the_same_in_any_order() {
+        let start = order_from(&["lrclib,lrcmux,unison,lrc-red,spicy,local".into()]).unwrap();
+        let picks = |names: &[&str]| -> Vec<&'static ProviderInfo> { names.iter().map(|n| resolve(n).unwrap()).collect() };
+        let run = |names: &[&str]| {
+            let mut cfg = Config::default();
+            cfg.providers.order = start.clone();
+            reset_providers(&mut cfg, &picks(names));
+            ordered_ids(&cfg)
+        };
+        let one = run(&["local", "lrclib"]);
+        assert_eq!(one, run(&["lrclib", "local"]));
+        assert_eq!(one[0], "local-library");
+        assert_eq!(one[5], "lrclib");
+        let all = run(&["local", "spicy", "lrc-red", "unison", "lrcmux", "lrclib"]);
+        assert_eq!(all, ordered_ids(&Config::default()));
     }
 }
