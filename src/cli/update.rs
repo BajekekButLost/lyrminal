@@ -62,10 +62,9 @@ async fn check_only() -> i32 {
 }
 
 fn progress(done: u64, total: u64) {
-    if total > 0 {
-        eprint!("\rDownloading {}%", (done * 100 / total).min(100));
-    } else {
-        eprint!("\rDownloading {} KB", done / 1024);
+    match (done * 100).checked_div(total) {
+        Some(pct) => eprint!("\rDownloading {}%", pct.min(100)),
+        None => eprint!("\rDownloading {} KB", done / 1024),
     }
     let _ = std::io::stderr().flush();
 }

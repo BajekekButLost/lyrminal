@@ -75,7 +75,7 @@ pub fn apply_list(list: &[Override], cfg: &mut Config) {
     let presets = list.iter().filter(|o| o.key == PRESET_KEY);
     for o in presets.chain(list.iter().filter(|o| o.key != PRESET_KEY)) {
         if o.key == ORDER_KEY {
-            if let Ok(ids) = crate::cli::providers::order_from(&[o.value.clone()]) {
+            if let Ok(ids) = crate::cli::providers::order_from(std::slice::from_ref(&o.value)) {
                 cfg.providers.order = ids;
                 cfg.providers.order = crate::providers::ordered_ids(cfg);
             }
