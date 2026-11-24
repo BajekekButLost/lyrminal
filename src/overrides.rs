@@ -92,13 +92,22 @@ pub fn apply(cfg: &mut Config) {
     apply_list(all(), cfg);
 }
 
+pub const API_KEY: &str = "providers.spicyLyrics.apiKey";
+pub const USE_OWN_KEY: &str = "providers.spicyLyrics.useOwnKey";
+
+fn footprint(key: &str) -> Vec<&str> {
+    match key {
+        PRESET_KEY => PRESET_KEYS.to_vec(),
+        API_KEY => vec![API_KEY, USE_OWN_KEY],
+        k => vec![k],
+    }
+}
+
 fn lock_in<'a>(list: &'a [Override], key: &str) -> Option<&'a Override> {
-    list.iter().rev().find(|o| o.key == key).or_else(|| {
-        PRESET_KEYS
-            .contains(&key)
-            .then(|| list.iter().rev().find(|o| o.key == PRESET_KEY))
-            .flatten()
-    })
+    list.iter()
+        .rev()
+        .find(|o| o.key == key)
+        .or_else(|| list.iter().rev().find(|o| footprint(&o.key).contains(&key)))
 }
 
 pub fn lock_of(key: &str) -> Option<&'static Override> {
@@ -122,6 +131,10 @@ pub fn item_lock(item: &Item) -> Option<&'static Override> {
 }
 
 fn copy(key: &str, from: &Config, into: &mut Config) {
+    if key == API_KEY {
+        into.providers.spicy_lyrics.api_key = from.providers.spicy_lyrics.api_key.clone();
+        return;
+    }
     let Ok(s) = setting_keys::find(key) else { return };
     match &s.item.kind {
         Kind::Toggle { get, set } => set(into, get(from)),
@@ -137,12 +150,11 @@ pub fn persisted_with(list: &[Override], effective: &Config, base: &Config) -> C
     for o in list {
         match o.key.as_str() {
             ORDER_KEY => out.providers.order = base.providers.order.clone(),
-            PRESET_KEY => {
-                for k in PRESET_KEYS {
-                    copy(k, base, &mut out);
+            k => {
+                for part in footprint(k) {
+                    copy(part, base, &mut out);
                 }
             }
-            k => copy(k, base, &mut out),
         }
     }
     out
@@ -195,5 +207,23 @@ mod tests {
         assert_eq!(saved.appearance.glow, base.appearance.glow);
         assert_eq!(saved.providers.order, base.providers.order);
         assert_eq!(saved.sync.offset_ms, 90);
+    }
+
+    #[test]
+    fn a_temporary_api_key_leaves_the_saved_key_settings_alone() {
+        let list = vec![parse("providers.spicy-lyrics.api-key=sl_sk_temp", "--set").unwrap()];
+        let mut base = Config::default();
+        base.providers.spicy_lyrics.api_key = "sl_sk_saved".into();
+        base.providers.spicy_lyrics.use_own_key = false;
+        let mut cfg = base.clone();
+        apply_list(&list, &mut cfg);
+        assert!(cfg.providers.spicy_lyrics.use_own_key);
+        assert_eq!(cfg.providers.spicy_lyrics.api_key, "sl_sk_temp");
+        assert!(lock_in(&list, USE_OWN_KEY).is_some());
+        cfg.sync.offset_ms = 10;
+        let saved = persisted_with(&list, &cfg, &base);
+        assert_eq!(saved.providers.spicy_lyrics.api_key, "sl_sk_saved");
+        assert!(!saved.providers.spicy_lyrics.use_own_key);
+        assert_eq!(saved.sync.offset_ms, 10);
     }
 }
