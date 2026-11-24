@@ -514,6 +514,7 @@ impl Preset {
 
 static BASE_DIR: OnceLock<PathBuf> = OnceLock::new();
 static CONFIG_FILE: OnceLock<PathBuf> = OnceLock::new();
+static STATE_FILE: OnceLock<PathBuf> = OnceLock::new();
 
 pub fn set_base_dir(dir: PathBuf) {
     let _ = BASE_DIR.set(dir);
@@ -527,6 +528,14 @@ pub fn set_config_file(path: PathBuf) {
     let _ = CONFIG_FILE.set(path);
 }
 
+pub fn set_state_file(path: PathBuf) {
+    let _ = STATE_FILE.set(path);
+}
+
+pub fn state_file() -> PathBuf {
+    STATE_FILE.get().cloned().unwrap_or_else(|| state_dir().join("state.json"))
+}
+
 pub fn relaunch_args() -> Vec<std::ffi::OsString> {
     let mut args: Vec<std::ffi::OsString> = Vec::new();
     let mut add = |flag: &str, value: Option<&PathBuf>| {
@@ -537,6 +546,7 @@ pub fn relaunch_args() -> Vec<std::ffi::OsString> {
     };
     add("--base-directory", BASE_DIR.get());
     add("--config", CONFIG_FILE.get());
+    add("--state-file", STATE_FILE.get());
     args
 }
 

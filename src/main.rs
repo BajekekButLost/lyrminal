@@ -50,12 +50,19 @@ fn setup_base(global: &cli::GlobalArgs) {
         None => {}
     }
     if let Some(file) = &global.config {
-        let path = library::expand_path(file);
-        if path.is_dir() {
-            cli::fail(format!("--config needs a file, {} is a folder", path.display()));
-        }
-        config::set_config_file(path);
+        config::set_config_file(file_arg("--config", file));
     }
+    if let Some(file) = &global.state_file {
+        config::set_state_file(file_arg("--state-file", file));
+    }
+}
+
+fn file_arg(flag: &str, value: &str) -> std::path::PathBuf {
+    let path = library::expand_path(value);
+    if path.is_dir() {
+        cli::fail(format!("{flag} needs a file, {} is a folder", path.display()));
+    }
+    path
 }
 
 #[tokio::main]

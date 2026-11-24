@@ -28,6 +28,8 @@ pub struct GlobalArgs {
     pub temp_base_directory: bool,
     #[arg(long, global = true, value_name = "FILE", value_parser = non_empty, help = "Read and save the settings in FILE instead of config.json")]
     pub config: Option<String>,
+    #[arg(long, global = true, value_name = "FILE", value_parser = non_empty, help = "Keep per-track offsets, chosen syncs and the tour status in FILE instead of state.json")]
+    pub state_file: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
