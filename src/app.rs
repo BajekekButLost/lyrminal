@@ -792,8 +792,9 @@ impl App {
     }
 
     pub fn reload_config(&mut self) -> Result<(), String> {
+        let stamp = Config::stamp();
         let base = Config::load().map_err(|e| format!("{e:#}"))?;
-        self.config_stamp = Config::stamp();
+        self.config_stamp = stamp;
         let mut cfg = base.clone();
         crate::overrides::apply(&mut cfg);
         self.base = base;
