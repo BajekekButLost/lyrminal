@@ -371,6 +371,38 @@ fn build_in(dir: &Path, tarball: &[u8]) -> Result<Vec<u8>, String> {
     std::fs::read(dir.join("target").join("release").join("lyrminal")).map_err(|e| format!("the build left no binary ({e})"))
 }
 
+struct BuildDir(PathBuf);
+
+impl Drop for BuildDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+impl BuildDir {
+    fn create() -> Result<Self, String> {
+        use std::hash::{BuildHasher, Hasher};
+        #[cfg(unix)]
+        use std::os::unix::fs::DirBuilderExt;
+        let root = std::env::temp_dir();
+        for _ in 0..16 {
+            let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+            h.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+            h.write_u32(std::process::id());
+            let dir = root.join(format!("lyrminal-build-{:016x}", h.finish()));
+            let mut builder = std::fs::DirBuilder::new();
+            #[cfg(unix)]
+            builder.mode(0o700);
+            match builder.create(&dir) {
+                Ok(()) => return Ok(Self(dir)),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(format!("could not create {} ({e})", dir.display())),
+            }
+        }
+        Err(format!("could not create a build folder in {}", root.display()))
+    }
+}
+
 pub fn has_cargo() -> bool {
     std::process::Command::new("cargo")
         .arg("--version")
@@ -394,21 +426,17 @@ where
         size: 0,
     };
     let tarball = download(client, &source, progress).await?;
-    let dir = std::env::temp_dir().join(format!(
-        "lyrminal-build-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
-    ));
-    std::fs::create_dir_all(&dir).map_err(|e| format!("could not create {} ({e})", dir.display()))?;
+    let dir = BuildDir::create()?;
     let version = release.version.clone();
     let path = dest.clone();
-    let work = dir.clone();
-    let result = tokio::task::spawn_blocking(move || build_in(&work, &tarball).and_then(|data| replace(&path, &data, &version)))
-        .await
-        .map_err(|e| e.to_string())
-        .and_then(|r| r);
-    let _ = std::fs::remove_dir_all(&dir);
-    result.map(|()| dest)
+    tokio::task::spawn_blocking(move || {
+        let result = build_in(&dir.0, &tarball).and_then(|data| replace(&path, &data, &version));
+        drop(dir);
+        result
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    Ok(dest)
 }
 
 fn restart_args() -> Vec<std::ffi::OsString> {
@@ -501,6 +529,19 @@ mod tests {
         replace(&dest, &data, "1.0.0").unwrap();
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), data.len() as u64);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn build_folders_are_private_fresh_and_cleaned_up() {
+        use std::os::unix::fs::PermissionsExt;
+        let a = BuildDir::create().unwrap();
+        let b = BuildDir::create().unwrap();
+        assert_ne!(a.0, b.0);
+        assert_eq!(std::fs::metadata(&a.0).unwrap().permissions().mode() & 0o777, 0o700);
+        let path = a.0.clone();
+        std::fs::write(path.join("x"), "y").unwrap();
+        drop(a);
+        assert!(!path.exists());
     }
 
     #[test]
