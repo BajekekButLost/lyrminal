@@ -384,7 +384,7 @@ fn built_executable(messages: &str) -> Option<PathBuf> {
         .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "lyrminal")
         .filter(|m| m["target"]["kind"].as_array().is_some_and(|k| k.iter().any(|v| v == "bin")))
         .filter_map(|m| m["executable"].as_str().map(PathBuf::from))
-        .last()
+        .next_back()
 }
 
 struct BuildDir(PathBuf);

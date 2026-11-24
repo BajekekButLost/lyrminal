@@ -348,10 +348,6 @@ pub fn reset_providers(cfg: &mut Config, list: &[&ProviderInfo]) {
     cfg.providers.order = ids;
 }
 
-pub fn reset_provider(cfg: &mut Config, p: &ProviderInfo) {
-    reset_providers(cfg, &[p]);
-}
-
 fn reset(args: ResetArgs) -> i32 {
     let mut cfg = super::load_config();
     if args.all {
@@ -445,7 +441,7 @@ mod tests {
         cfg.providers.set_enabled("lrclib", false);
         cfg.providers.lrclib.duration_tolerance_secs = 7.0;
         cfg.providers.lrc_red.duration_tolerance_secs = 7.0;
-        reset_provider(&mut cfg, lrclib);
+        reset_providers(&mut cfg, &[lrclib]);
         assert_eq!(ordered_ids(&cfg), ordered_ids(&Config::default()));
         assert!(cfg.providers.is_enabled("lrclib"));
         assert_eq!(cfg.providers.lrclib.duration_tolerance_secs, 2.0);
