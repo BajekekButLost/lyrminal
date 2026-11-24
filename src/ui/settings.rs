@@ -1235,6 +1235,15 @@ pub enum SettingsOutcome {
     Close,
     Changed,
     Action(SettingsAction),
+    Locked(String),
+}
+
+pub fn lock_message(o: &crate::overrides::Override) -> String {
+    format!("Locked: set by {} for this session", o.flag)
+}
+
+fn locked(o: Option<&crate::overrides::Override>) -> Option<SettingsOutcome> {
+    o.map(|o| SettingsOutcome::Locked(lock_message(o)))
 }
 
 fn move_provider(cfg: &mut Config, id: &str, delta: i32) {
@@ -1339,6 +1348,10 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
     }
 
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let value_lock = match &current.kind {
+        Kind::Provider(_) => None,
+        _ => crate::overrides::item_lock(current),
+    };
     let leave_page = |state: &mut SettingsState, cfg: &Config| {
         if let Some(id) = state.page.take() {
             state.item = ordered_ids(cfg).iter().position(|p| *p == id).unwrap_or(0);
@@ -1373,6 +1386,9 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
             if (shift || matches!(key.code, KeyCode::Char('K') | KeyCode::Char('J')))
                 && matches!(current.kind, Kind::Provider(_)) =>
         {
+            if let Some(out) = locked(crate::overrides::order_lock()) {
+                return out;
+            }
             if let Kind::Provider(id) = &current.kind {
                 let delta = if matches!(key.code, KeyCode::Up | KeyCode::Char('K')) { -1 } else { 1 };
                 let id = id.clone();
@@ -1388,6 +1404,11 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
         KeyCode::End | KeyCode::Char('G') => state.item = items.len() - 1,
         KeyCode::Left | KeyCode::Char('h') | KeyCode::Right | KeyCode::Char('l') => {
             let dir: i32 = if matches!(key.code, KeyCode::Left | KeyCode::Char('h')) { -1 } else { 1 };
+            if adjustable(&current.kind)
+                && let Some(out) = locked(value_lock)
+            {
+                return out;
+            }
             if step_value(cfg, &current.kind, dir, shift) {
                 return SettingsOutcome::Changed;
             }
@@ -1397,6 +1418,17 @@ pub fn handle_key(state: &mut SettingsState, cfg: &mut Config, key: KeyEvent) ->
                 state.section = (state.section + 1) % secs.len();
             }
             state.item = 0;
+        }
+        KeyCode::Enter | KeyCode::Char(' ') if value_lock.is_some() && (adjustable(&current.kind) || matches!(current.kind, Kind::Text { .. })) => {
+            return locked(value_lock).unwrap_or(SettingsOutcome::None);
+        }
+        KeyCode::Char(' ') if matches!(&current.kind, Kind::Provider(id) if crate::overrides::enabled_lock(id).is_some()) => {
+            if let Kind::Provider(id) = &current.kind {
+                return locked(crate::overrides::enabled_lock(id)).unwrap_or(SettingsOutcome::None);
+            }
+        }
+        KeyCode::Char('r') | KeyCode::Delete | KeyCode::Backspace if crate::overrides::item_lock(current).is_some() => {
+            return locked(crate::overrides::item_lock(current)).unwrap_or(SettingsOutcome::None);
         }
         KeyCode::Enter | KeyCode::Char(' ') => match &current.kind {
             Kind::Toggle { .. } | Kind::Choice { .. } | Kind::Preset { .. } => {

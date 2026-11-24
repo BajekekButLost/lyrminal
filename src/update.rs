@@ -412,7 +412,9 @@ where
 }
 
 fn restart_args() -> Vec<std::ffi::OsString> {
-    crate::config::relaunch_args()
+    let mut args = crate::config::relaunch_args();
+    args.extend(crate::overrides::relaunch_args());
+    args
 }
 
 #[cfg(unix)]

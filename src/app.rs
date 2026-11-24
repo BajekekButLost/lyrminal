@@ -197,6 +197,7 @@ pub struct App {
     pub restart_into: Option<std::path::PathBuf>,
     config_stamp: Option<(std::time::SystemTime, u64)>,
     next_config_check: Instant,
+    base: Config,
 }
 
 impl App {
@@ -206,6 +207,9 @@ impl App {
         player_tx: UnboundedSender<PlayerCommand>,
         msg_tx: UnboundedSender<AppMsg>,
     ) -> Self {
+        let base = cfg.clone();
+        let mut cfg = cfg;
+        crate::overrides::apply(&mut cfg);
         let client = crate::providers::http_client();
         let registry = Registry::from_config(&cfg, &client);
         let cache = Cache::new(crate::config::cache_dir(), cfg.cache.ttl_days, cfg.cache.enabled);
@@ -264,6 +268,7 @@ impl App {
             restart_into: None,
             config_stamp: Config::stamp(),
             next_config_check: now + CONFIG_CHECK_EVERY,
+            base,
         };
         app.ensure_fonts();
         app
@@ -787,8 +792,11 @@ impl App {
     }
 
     pub fn reload_config(&mut self) -> Result<(), String> {
-        let cfg = Config::load().map_err(|e| format!("{e:#}"))?;
+        let base = Config::load().map_err(|e| format!("{e:#}"))?;
         self.config_stamp = Config::stamp();
+        let mut cfg = base.clone();
+        crate::overrides::apply(&mut cfg);
+        self.base = base;
         let old = std::mem::replace(&mut self.cfg, cfg);
         self.apply_changes(&old);
         self.notify("Settings reloaded");
@@ -852,6 +860,7 @@ impl App {
                     SettingsOutcome::Close => self.set_overlay(Overlay::None),
                     SettingsOutcome::Changed => self.apply_config(&old),
                     SettingsOutcome::Action(a) => self.settings_action(a),
+                    SettingsOutcome::Locked(m) => self.notify(m),
                 }
                 return;
             }
@@ -1222,9 +1231,17 @@ impl App {
     }
 
     pub fn apply_config(&mut self, old: &Config) {
-        if let Err(e) = self.cfg.save() {
+        let json = |v: &dyn erased::Json| v.json();
+        let wanted = json(&self.cfg);
+        crate::overrides::apply(&mut self.cfg);
+        if json(&self.cfg) != wanted {
+            self.notify("That setting is locked by a launch flag for this session");
+        }
+        let file = crate::overrides::persisted(&self.cfg, &self.base);
+        if let Err(e) = file.save() {
             self.notify(format!("Could not save settings: {e}"));
         }
+        self.base = file;
         self.config_stamp = Config::stamp();
         self.apply_changes(old);
     }

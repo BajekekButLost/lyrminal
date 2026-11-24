@@ -6,6 +6,7 @@ mod ipc;
 mod library;
 mod lyrics;
 mod now_playing;
+mod overrides;
 mod player;
 mod providers;
 mod render;
@@ -88,6 +89,20 @@ fn file_arg(flag: &str, value: &str) -> std::path::PathBuf {
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = cli::Cli::parse();
+    if args.command.is_some() && args.launch.any() {
+        let _ = cli::Cli::command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "temporary settings only apply when starting the app, not to commands",
+            )
+            .exit();
+    }
+    match args.launch.overrides() {
+        Ok(list) => overrides::set(list),
+        Err(e) => {
+            let _ = cli::Cli::command().error(clap::error::ErrorKind::InvalidValue, e).exit();
+        }
+    }
     setup_base(&args.global);
     if let Some(command) = args.command {
         unsafe {
@@ -108,16 +123,18 @@ async fn main() -> Result<()> {
         }
     };
 
+    let mut effective = cfg.clone();
+    overrides::apply(&mut effective);
     let caps = term::probe();
     let mut terminal = ratatui::init();
     term::reset_backdrop_on_panic();
-    let mut mouse = cfg.appearance.mouse;
+    let mut mouse = effective.appearance.mouse;
     let _ = execute!(std::io::stdout(), EnableBracketedPaste);
     if mouse {
         let _ = execute!(std::io::stdout(), EnableMouseCapture);
     }
 
-    let (player_tx, player_rx) = player::spawn(cfg.player.clone());
+    let (player_tx, player_rx) = player::spawn(effective.player.clone());
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
     let (ipc_tx, ipc_rx) = mpsc::unbounded_channel();
     let server = ipc::serve(config::socket_path(), ipc_tx);

@@ -1,7 +1,7 @@
 mod library;
 mod now_playing;
 mod paths;
-mod providers;
+pub mod providers;
 mod settings;
 mod update;
 
@@ -19,8 +19,32 @@ use crate::config::Config;
 pub struct Cli {
     #[command(flatten)]
     pub global: GlobalArgs,
+    #[command(flatten)]
+    pub launch: LaunchArgs,
     #[command(subcommand)]
     pub command: Option<Command>,
+}
+
+#[derive(Args, Debug, Default)]
+#[command(next_help_heading = "Temporary settings (locked in the app, never saved)")]
+pub struct LaunchArgs {
+    #[arg(
+        long = "set",
+        value_name = "KEY=VALUE",
+        allow_hyphen_values = true,
+        help = "Start with a setting changed just for this session, e.g. --set appearance.style=bloom (see lyrminal settings list); repeat it for more"
+    )]
+    pub set: Vec<String>,
+}
+
+impl LaunchArgs {
+    pub fn overrides(&self) -> Result<Vec<crate::overrides::Override>, String> {
+        self.set.iter().map(|s| crate::overrides::parse(s, "--set")).collect()
+    }
+
+    pub fn any(&self) -> bool {
+        !self.set.is_empty()
+    }
 }
 
 #[derive(Args, Debug, Default, Clone)]
