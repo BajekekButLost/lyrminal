@@ -201,9 +201,19 @@ fn steady(data: &Value) -> Value {
     data
 }
 
+pub const EVENT_KEYS: &[&str] = &["status", "player", "title", "artist", "album", "lyrics", "line", "word", "interlude"];
+
+pub fn event(data: &Value) -> String {
+    EVENT_KEYS.iter().map(|k| data[*k].to_string()).collect::<Vec<_>>().join("\u{1f}")
+}
+
 impl NowPlayingArgs {
     fn shown(&self, data: &Value) -> String {
         if self.strict && empty_reason(data).is_some() { String::new() } else { self.line(data) }
+    }
+
+    fn change_key(&self, data: &Value) -> String {
+        format!("{}\u{1e}{}", event(data), self.shown(&steady(data)))
     }
 }
 
@@ -223,7 +233,7 @@ async fn watch(args: NowPlayingArgs) -> i32 {
             None => Err(ipc::NOT_RUNNING.to_string()),
         };
         let (line, key) = match answer {
-            Ok(data) => (args.shown(&data), args.shown(&steady(&data))),
+            Ok(data) => (args.shown(&data), args.change_key(&data)),
             Err(_) => {
                 client = None;
                 (String::new(), String::new())
@@ -295,5 +305,14 @@ mod tests {
         assert_eq!(empty_reason(&json!({"status": "playing", "lyrics": "ready"})), None);
         assert!(empty_reason(&json!({"status": "paused", "lyrics": "not found"})).is_some());
         assert!(empty_reason(&json!({"status": "no player", "lyrics": "no player"})).is_some());
+    }
+
+    #[test]
+    fn watch_notices_line_and_word_changes_whatever_is_printed() {
+        let a = json!({"status": "playing", "title": "T", "line": 1, "word": "one", "position": 1.0});
+        let b = json!({"status": "playing", "title": "T", "line": 1, "word": "two", "position": 1.2});
+        let c = json!({"status": "playing", "title": "T", "line": 1, "word": "two", "position": 1.4});
+        assert_ne!(event(&a), event(&b));
+        assert_eq!(event(&b), event(&c));
     }
 }
