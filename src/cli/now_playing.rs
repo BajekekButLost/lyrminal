@@ -20,6 +20,8 @@ pub struct NowPlayingArgs {
     pub full: bool,
     #[arg(long, help = "Print unformatted values (seconds, progress from 0 to 1) separated by tabs")]
     pub raw: bool,
+    #[arg(long, conflicts_with = "raw", help = "Print a JSON object with every field, or only those given with --fields")]
+    pub json: bool,
 }
 
 impl NowPlayingArgs {
@@ -138,11 +140,39 @@ pub fn render(data: &Value, fields: &[Field], separator: &str, unformatted: bool
         .join(separator)
 }
 
+pub fn to_json(data: &Value, fields: &[Field]) -> Value {
+    let mut data = data.clone();
+    if let Some(map) = data.as_object_mut() {
+        map.remove("ok");
+        if !fields.is_empty() {
+            let keep: Vec<&str> = fields
+                .iter()
+                .flat_map(|f| match f {
+                    Field::Time => vec!["position", "length"],
+                    f => vec![f.key()],
+                })
+                .collect();
+            map.retain(|k, _| keep.contains(&k.as_str()));
+        }
+    }
+    data
+}
+
+impl NowPlayingArgs {
+    fn line(&self, data: &Value) -> String {
+        if self.json {
+            let fields = if self.full { FULL.to_vec() } else { self.fields.clone() };
+            return to_json(data, &fields).to_string();
+        }
+        let separator = self.separator.as_deref().unwrap_or(if self.raw { "\t" } else { " · " });
+        render(data, &self.fields(), separator, self.raw)
+    }
+}
+
 pub async fn run(args: NowPlayingArgs) -> i32 {
-    let separator = args.separator.as_deref().unwrap_or(if args.raw { "\t" } else { " · " });
     match ipc::call(&Request::NowPlaying).await {
         Ok(data) => {
-            println!("{}", render(&data, &args.fields(), separator, args.raw));
+            println!("{}", args.line(&data));
             0
         }
         Err(e) => {
@@ -174,5 +204,8 @@ mod tests {
         assert_eq!(format(&data, Field::Progress), "43%");
         assert_eq!(format(&data, Field::Line), "12");
         assert_eq!(format(&data, Field::Album), "");
+        let picked = to_json(&json!({"ok": true, "title": "T", "position": 1.0, "length": 2.0, "text": "x"}), &[Field::Time, Field::Title]);
+        assert_eq!(picked, json!({"title": "T", "position": 1.0, "length": 2.0}));
+        assert_eq!(to_json(&json!({"ok": true, "text": "x"}), &[]), json!({"text": "x"}));
     }
 }
