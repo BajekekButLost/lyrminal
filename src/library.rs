@@ -133,11 +133,12 @@ pub fn expand_path(input: &str) -> PathBuf {
     } else {
         PathBuf::from(input)
     };
-    if path.is_absolute() {
+    let path = if path.is_absolute() {
         path
     } else {
         std::env::current_dir().map(|d| d.join(&path)).unwrap_or(path)
-    }
+    };
+    path.components().filter(|c| *c != std::path::Component::CurDir).collect()
 }
 
 pub fn parse(text: &str, source: &Source, format: Option<Format>, duration: Option<f64>) -> Result<(Lyrics, Format), String> {

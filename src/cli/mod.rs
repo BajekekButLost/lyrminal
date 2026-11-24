@@ -1,3 +1,5 @@
+mod paths;
+
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser, Debug)]
@@ -15,6 +17,7 @@ pub struct Cli {
 }
 
 #[derive(Args, Debug, Default, Clone)]
+#[command(next_help_heading = "Global options")]
 pub struct GlobalArgs {
     #[arg(
         long,
@@ -37,7 +40,10 @@ pub struct GlobalArgs {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum Command {}
+pub enum Command {
+    #[command(about = "Show where Lyrminal keeps its files")]
+    Paths(paths::PathsArgs),
+}
 
 pub fn non_empty(s: &str) -> Result<String, String> {
     if s.trim().is_empty() {
@@ -53,5 +59,7 @@ pub fn fail(msg: impl std::fmt::Display) -> ! {
 }
 
 pub async fn run(command: Command) -> i32 {
-    match command {}
+    match command {
+        Command::Paths(args) => paths::run(args),
+    }
 }
