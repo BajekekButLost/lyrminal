@@ -15,7 +15,7 @@ use super::{FrameInfo, FrameInput, push_px_hit};
 use crate::config::ClickSeek;
 use crate::anim::{Rgb, Spring, lerp};
 use crate::config::{Alignment, Background, SyllableSpacing, VisualStyle};
-use crate::lyrics::process::{self, ItemKind, Prepared, State};
+use crate::lyrics::process::{self, ItemKind, Prepared, State, WordSpan};
 use crate::lyrics::{LyricLine, SyncKind, VocalGroup};
 
 const RASTER_STEP: f32 = 0.05;
@@ -288,6 +288,38 @@ fn part_group(kind: PartKind, line: &LyricLine) -> Option<&VocalGroup> {
         PartKind::Bg(i) => line.background.get(i),
         _ => None,
     }
+}
+
+fn edge_rows(part: &Part, group: &VocalGroup, words: &[WordSpan]) -> HashMap<i32, Vec<EdgeWord>> {
+    let mut rows: HashMap<i32, Vec<EdgeWord>> = HashMap::new();
+    for w in words {
+        let mut s = w.syllables.start;
+        while s < w.syllables.end {
+            let row = part.syl_rows[s];
+            let mut e = s + 1;
+            while e < w.syllables.end && part.syl_rows[e] == row {
+                e += 1;
+            }
+            let (x_lo, x_hi) = part.syl_boxes[s..e]
+                .iter()
+                .fold((f32::MAX, f32::MIN), |(lo, hi), b| (lo.min(b.0), hi.max(b.1)));
+            if x_lo <= x_hi {
+                let syl = &group.syllables[s..e];
+                rows.entry(row as i32).or_default().push(EdgeWord {
+                    x: x_lo as f64,
+                    w: (x_hi - x_lo) as f64,
+                    start: syl[0].start,
+                    end: syl[syl.len() - 1].end,
+                    letters: syl.iter().map(|s| process::letter_count(&s.text)).sum(),
+                });
+            }
+            s = e;
+        }
+    }
+    for ws in rows.values_mut() {
+        ws.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+    }
+    rows
 }
 
 fn scale_about(p: (f32, f32), pivot: (f32, f32), s: f32) -> (f32, f32) {
@@ -1103,23 +1135,8 @@ impl PixelRenderer {
 
         let mut edges: HashMap<i32, f64> = HashMap::new();
         if style == VisualStyle::Bloom && state == State::Active {
-            let mut rows: HashMap<i32, Vec<EdgeWord>> = HashMap::new();
-            for (wi, w) in words.iter().enumerate() {
-                let Some(first) = part.glyphs.iter().find(|g| g.word == wi && !g.blank) else { continue };
-                let row = first.baseline as i32;
-                let x_lo = w.syllables.clone().filter_map(|s| part.syl_boxes.get(s)).map(|b| b.0).fold(f32::MAX, f32::min);
-                let x_hi = w.syllables.clone().filter_map(|s| part.syl_boxes.get(s)).map(|b| b.1).fold(f32::MIN, f32::max);
-                rows.entry(row).or_default().push(EdgeWord {
-                    x: x_lo as f64,
-                    w: (x_hi - x_lo) as f64,
-                    start: w.start,
-                    end: w.end,
-                    letters: w.letters,
-                });
-            }
             let fade = 0.882 * size as f64;
-            for (row, mut ws) in rows {
-                ws.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap_or(std::cmp::Ordering::Equal));
+            for (row, ws) in edge_rows(part, group, &words) {
                 edges.insert(row, effects::bloom_row_edge(&ws, t, fade));
             }
         }
@@ -1416,6 +1433,33 @@ mod tests {
             assert_eq!(count, 1, "{middle}");
             assert_eq!(letters, middle.chars().filter(|c| !c.is_whitespace() && *c != '\u{200b}').count(), "{middle}");
         }
+    }
+
+    #[test]
+    fn bloom_edge_follows_words_split_across_rows() {
+        let mut renderer = PixelRenderer::new(load_fonts());
+        let group = words("I'ma have that pus|sy on lock like po-|po", 0.0, 0.3);
+        let word_spans = process::words(&group);
+        let mut split = 0;
+        for width in (300..1200).step_by(10) {
+            let part = renderer.build_part(PartKind::Lead, &group, SyncKind::Syllable, false, 44.0, width as f32, 0.0, Align::Left, "", 700);
+            let last = word_spans.last().unwrap().syllables.clone();
+            if part.syl_rows[last.start] != part.syl_rows[last.end - 1] {
+                split += 1;
+            }
+            for (row, ws) in edge_rows(&part, &group, &word_spans) {
+                for pair in ws.windows(2) {
+                    assert!(pair[0].x + pair[0].w <= pair[1].x, "width {width} row {row}: overlapping edge words");
+                    assert!(pair[0].end <= pair[1].start, "width {width} row {row}: edge words out of time order");
+                }
+                for w in &ws {
+                    let on_row = part.glyphs.iter().filter(|g| !g.blank && g.baseline as i32 == row);
+                    let (lo, hi) = on_row.fold((f32::MAX, f32::MIN), |(lo, hi), g| (lo.min(g.glyph.x), hi.max(g.glyph.x + g.glyph.w)));
+                    assert!(w.x >= lo as f64 - 1e-3 && w.x + w.w <= hi as f64 + 1e-3, "width {width} row {row}: edge word outside its row");
+                }
+            }
+        }
+        assert!(split > 0, "no width wrapped the hyphenated word");
     }
 
     #[test]
