@@ -8,6 +8,25 @@ use crate::update::{self, CURRENT, Release};
 pub struct UpdateArgs {
     #[arg(short, long, help = "Install without asking")]
     pub yes: bool,
+    #[arg(long, help = "Only check: exit with 0 when up to date, 1 when a new release is out and 2 when the check fails")]
+    pub check: bool,
+}
+
+async fn check_only() -> i32 {
+    match update::check(&crate::providers::http_client()).await {
+        Ok(Some(r)) => {
+            describe(&r);
+            1
+        }
+        Ok(None) => {
+            println!("Lyrminal v{CURRENT} is up to date");
+            0
+        }
+        Err(e) => {
+            eprintln!("lyrminal: could not check for updates: {e}");
+            2
+        }
+    }
 }
 
 fn progress(done: u64, total: u64) {
@@ -52,6 +71,9 @@ fn describe(release: &Release) {
 }
 
 pub async fn run(args: UpdateArgs) -> i32 {
+    if args.check {
+        return check_only().await;
+    }
     if let Err(e) = update::install_path() {
         super::fail(e);
     }
