@@ -25,6 +25,18 @@ pub enum ProvidersCommand {
     Order(IdsArgs),
     #[command(about = "List a provider's options with their values")]
     Options(OptionsArgs),
+    #[command(about = "Print the value of one of a provider's options")]
+    Get(GetArgs),
+}
+
+#[derive(Args, Debug)]
+pub struct GetArgs {
+    #[arg(help = "Provider id or name")]
+    pub provider: String,
+    #[arg(help = "Option name, e.g. durationToleranceSecs (see providers options)")]
+    pub option: String,
+    #[arg(long, help = "Show the API key instead of masking it")]
+    pub reveal: bool,
 }
 
 #[derive(Args, Debug)]
@@ -251,6 +263,18 @@ fn options(args: OptionsArgs) -> i32 {
     0
 }
 
+fn option(provider_name: &str, name: &str) -> (&'static ProviderInfo, Setting) {
+    let p = provider(provider_name);
+    let s = find_option(p, name).unwrap_or_else(|e| super::fail(e));
+    (p, s)
+}
+
+fn get(args: GetArgs) -> i32 {
+    let (_, s) = option(&args.provider, &args.option);
+    println!("{}", setting_keys::value(&super::load_config(), &s.item, args.reveal));
+    0
+}
+
 pub fn run(args: ProvidersArgs) -> i32 {
     match args.command {
         ProvidersCommand::List(a) => list(a),
@@ -259,6 +283,7 @@ pub fn run(args: ProvidersArgs) -> i32 {
         ProvidersCommand::Move(a) => move_provider(a),
         ProvidersCommand::Order(a) => order(a),
         ProvidersCommand::Options(a) => options(a),
+        ProvidersCommand::Get(a) => get(a),
     }
 }
 
