@@ -114,6 +114,7 @@ async fn main() -> Result<()> {
     let temp = args.global.temp_base_directory;
 
     let fresh = !Config::path().exists();
+    let config_stamp = Config::stamp();
     let cfg = match Config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -138,7 +139,7 @@ async fn main() -> Result<()> {
     let (msg_tx, msg_rx) = mpsc::unbounded_channel();
     let (ipc_tx, ipc_rx) = mpsc::unbounded_channel();
     let server = ipc::serve(config::socket_path(), ipc_tx);
-    let mut app = App::new(cfg, caps, player_tx, msg_tx);
+    let mut app = App::new(cfg, config_stamp, caps, player_tx, msg_tx);
     app.maybe_onboard(fresh);
     app.enable_update_checks();
     let mut gfx = Graphics::default();

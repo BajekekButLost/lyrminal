@@ -1351,7 +1351,13 @@ mod tests {
     async fn draws_the_library_dialog() {
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(crate::config::Config::default(), crate::term::TermCaps::default(), player_tx, msg_tx);
+        let mut app = App::new(
+            crate::config::Config::default(),
+            crate::config::Config::stamp(),
+            crate::term::TermCaps::default(),
+            player_tx,
+            msg_tx,
+        );
         let dir = std::env::temp_dir().join(format!("lyrminal-draw-test-{}", std::process::id()));
         app.library = crate::library::Library::new(dir.clone());
         let track = crate::player::TrackMeta {
@@ -1420,7 +1426,13 @@ mod tests {
         let press = |app: &mut App, code: KeyCode| app.on_event(Event::Key(KeyEvent::new(code, KeyModifiers::NONE)));
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, mut msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(crate::config::Config::default(), crate::term::TermCaps::default(), player_tx, msg_tx);
+        let mut app = App::new(
+            crate::config::Config::default(),
+            crate::config::Config::stamp(),
+            crate::term::TermCaps::default(),
+            player_tx,
+            msg_tx,
+        );
         let dir = std::env::temp_dir().join(format!("lyrminal-e2e-{}", std::process::id()));
         app.library = crate::library::Library::new(dir.clone());
         let track = crate::player::TrackMeta {

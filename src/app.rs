@@ -203,6 +203,7 @@ pub struct App {
 impl App {
     pub fn new(
         cfg: Config,
+        config_stamp: Option<(std::time::SystemTime, u64)>,
         caps: TermCaps,
         player_tx: UnboundedSender<PlayerCommand>,
         msg_tx: UnboundedSender<AppMsg>,
@@ -266,7 +267,7 @@ impl App {
             update_checks: false,
             next_update_check: None,
             restart_into: None,
-            config_stamp: Config::stamp(),
+            config_stamp,
             next_config_check: now + CONFIG_CHECK_EVERY,
             base,
         };
@@ -2183,7 +2184,7 @@ mod tests {
     fn app() -> App {
         let (player_tx, _player_rx) = tokio::sync::mpsc::unbounded_channel();
         let (msg_tx, _msg_rx) = tokio::sync::mpsc::unbounded_channel();
-        let mut app = App::new(Config::default(), TermCaps::default(), player_tx, msg_tx);
+        let mut app = App::new(Config::default(), Config::stamp(), TermCaps::default(), player_tx, msg_tx);
         app.guide = Some(Onboarding::new(false));
         app.guide_go(Step::Player);
         app
