@@ -35,15 +35,32 @@ pub struct LaunchArgs {
         help = "Start with a setting changed just for this session, e.g. --set appearance.style=bloom (see lyrminal settings list); repeat it for more"
     )]
     pub set: Vec<String>,
+    #[arg(long, value_name = "cell|pixel", help = "Use this renderer for this session")]
+    pub renderer: Option<String>,
 }
 
 impl LaunchArgs {
+    fn shortcuts(&self) -> Vec<(&'static str, &'static str, String)> {
+        let mut out = Vec::new();
+        if let Some(v) = &self.renderer {
+            out.push(("--renderer", "appearance.renderer", v.clone()));
+        }
+        out
+    }
+
     pub fn overrides(&self) -> Result<Vec<crate::overrides::Override>, String> {
-        self.set.iter().map(|s| crate::overrides::parse(s, "--set")).collect()
+        let mut list = Vec::new();
+        for (flag, key, value) in self.shortcuts() {
+            list.push(crate::overrides::make(key, &value, flag)?);
+        }
+        for s in &self.set {
+            list.push(crate::overrides::parse(s, "--set")?);
+        }
+        Ok(list)
     }
 
     pub fn any(&self) -> bool {
-        !self.set.is_empty()
+        !self.set.is_empty() || !self.shortcuts().is_empty()
     }
 }
 
