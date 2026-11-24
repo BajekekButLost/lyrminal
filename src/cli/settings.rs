@@ -24,6 +24,8 @@ pub enum SettingsCommand {
     Reset(ResetArgs),
     #[command(about = "Explain a setting: what it does, the values it takes and its default")]
     Info(InfoArgs),
+    #[command(about = "Print where the config file is")]
+    Path,
 }
 
 #[derive(Args, Debug)]
@@ -239,5 +241,9 @@ pub fn run(args: SettingsArgs) -> i32 {
         SettingsCommand::Toggle(a) => toggle(a),
         SettingsCommand::Reset(a) => reset(a),
         SettingsCommand::Info(a) => info(a),
+        SettingsCommand::Path => {
+            println!("{}", Config::path().display());
+            0
+        }
     }
 }
