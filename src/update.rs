@@ -360,16 +360,31 @@ fn build_in(dir: &Path, tarball: &[u8]) -> Result<Vec<u8>, String> {
             .arg("--strip-components=1"),
         "tar",
     )?;
-    run_tool(
-        std::process::Command::new("cargo")
-            .args(["build", "--release", "--locked", "--manifest-path"])
-            .arg(src.join("Cargo.toml"))
-            .current_dir(&src)
-            .env("CARGO_TARGET_DIR", dir.join("target"))
-            .stdin(std::process::Stdio::null()),
-        "cargo build",
-    )?;
-    std::fs::read(dir.join("target").join("release").join("lyrminal")).map_err(|e| format!("the build left no binary ({e})"))
+    let out = std::process::Command::new("cargo")
+        .args(["build", "--release", "--locked", "--message-format=json-render-diagnostics", "--manifest-path"])
+        .arg(src.join("Cargo.toml"))
+        .current_dir(&src)
+        .env("CARGO_TARGET_DIR", dir.join("target"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .map_err(|e| format!("could not run cargo build ({e})"))?;
+    if !out.status.success() {
+        return Err(format!("cargo build failed ({})", out.status));
+    }
+    let exe = built_executable(&String::from_utf8_lossy(&out.stdout)).ok_or("the build left no binary")?;
+    std::fs::read(&exe).map_err(|e| format!("could not read the built binary {} ({e})", exe.display()))
+}
+
+fn built_executable(messages: &str) -> Option<PathBuf> {
+    messages
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|m| m["reason"] == "compiler-artifact" && m["target"]["name"] == "lyrminal")
+        .filter(|m| m["target"]["kind"].as_array().is_some_and(|k| k.iter().any(|v| v == "bin")))
+        .filter_map(|m| m["executable"].as_str().map(PathBuf::from))
+        .last()
 }
 
 struct BuildDir(PathBuf);
@@ -530,6 +545,22 @@ mod tests {
         replace(&dest, &data, "1.0.0").unwrap();
         assert_eq!(std::fs::metadata(&dest).unwrap().len(), data.len() as u64);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_the_built_binary_in_cargo_messages() {
+        let messages = [
+            r#"{"reason":"compiler-artifact","target":{"kind":["lib"],"name":"serde"},"executable":null}"#,
+            "not json",
+            r#"{"reason":"compiler-artifact","target":{"kind":["bin"],"name":"lyrminal"},"executable":"/b/target/x86_64-unknown-linux-musl/release/lyrminal"}"#,
+            r#"{"reason":"build-finished","success":true}"#,
+        ]
+        .join("\n");
+        assert_eq!(
+            built_executable(&messages),
+            Some(PathBuf::from("/b/target/x86_64-unknown-linux-musl/release/lyrminal"))
+        );
+        assert_eq!(built_executable(r#"{"reason":"build-finished","success":false}"#), None);
     }
 
     #[test]
