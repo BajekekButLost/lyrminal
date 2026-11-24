@@ -53,6 +53,9 @@ pub fn make(key: &str, value: &str, flag: &str) -> Result<Override, String> {
         ORDER_KEY.to_string()
     } else {
         let s = setting_keys::find(key)?;
+        if value.eq_ignore_ascii_case("toggle") {
+            return Err(format!("{flag}: {} needs on or off here, not toggle", s.key()));
+        }
         setting_keys::apply(&mut Config::default(), &s.item, value).map_err(|e| format!("{flag}: {e}"))?;
         s.key().to_string()
     };
@@ -170,6 +173,12 @@ mod tests {
         assert!(parse("appearance.style", "--set").is_err());
         assert!(parse("appearance.fontScale=99", "--set").is_err());
         assert!(parse("nope=1", "--set").is_err());
+        assert!(parse("controls.enabled=toggle", "--set").is_err());
+        let off = vec![parse("controls.enabled=off", "--set").unwrap()];
+        let mut twice = Config::default();
+        apply_list(&off, &mut twice);
+        apply_list(&off, &mut twice);
+        assert!(!twice.controls.enabled);
         let mut base = Config::default();
         base.sync.offset_ms = 40;
         let mut cfg = base.clone();
